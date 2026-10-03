@@ -43,4 +43,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ github.event.head_commit.message }}
-        run: gh release create "build-${{ github.run_number }}" shrinky.apk --title "Shrinky build ${{ github.run_number }}" --notes "${NOTES:-Automated build}" --target "${{ github.sha }}" --latest
+        run: gh release create "build-${{ github.run_number }}" shrinky.apk --title "Shrinky" --notes "${NOTES:-Automated build}" --target "${{ github.sha }}" --latest
