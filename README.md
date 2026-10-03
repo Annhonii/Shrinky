@@ -49,5 +49,4 @@ A featherlight, distraction-free utility designed to compress, crop, and convert
 ---
 
 ## Credits
-
-The look and feel (palette, floating pill navigation, press and slide animations) is modelled on [MissingCore/Music](https://github.com/MissingCore/Music). The UI typeface is [Geist](https://github.com/vercel/geist-font) by Vercel, under the SIL Open Font License 1.1.
+ The UI typeface is [Geist](https://github.com/vercel/geist-font) by Vercel, under the SIL Open Font License 1.1.
