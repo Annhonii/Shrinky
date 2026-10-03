@@ -95,7 +95,10 @@ fun CropScreen(vm: CropVm, pickFolder: () -> Unit) {
 
             Reveal(src != null) {
                 Rule()
-                Section("Select area") { CropEditor(vm.editor) }
+                Section("Select area") {
+                    CropEditor(vm.editor)
+                    Text("Drag a corner to resize the frame \u00b7 drag the photo to move it \u00b7 pinch to zoom", color = p.mute, style = Type.small)
+                }
                 Rule()
                 Section("Output format") {
                     Segmented(OutFormat.entries.map { it.label }, vm.format.ordinal) { vm.onFormat(OutFormat.entries[it]) }

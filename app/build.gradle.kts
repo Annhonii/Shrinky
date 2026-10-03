@@ -11,8 +11,8 @@ android {
         applicationId = "com.davexh.shrinky"
         minSdk = 29
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4"
+        versionCode = 5
+        versionName = "0.5"
         resourceConfigurations += listOf("en")
     }
     // Stable signing key for CI releases (set from repo secrets by the workflow). Without it, the debug key is used.

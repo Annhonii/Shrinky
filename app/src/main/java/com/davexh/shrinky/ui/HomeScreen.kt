@@ -57,11 +57,11 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
             DotMeter(meter)
             Spacer(Modifier.height(14.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Readout("Original", src?.let { formatSize(it.bytes) } ?: "--")
+                Readout("Original", src?.let { formatSizeIn(it.bytes, vm.unitMb) } ?: "--")
                 if (result != null) {
-                    Readout("Result", formatSize(result.bytes.size.toLong()), alignEnd = true, warn = !result.hitTarget)
+                    Readout("Result", formatSizeIn(result.bytes.size.toLong(), vm.unitMb), alignEnd = true, warn = !result.hitTarget)
                 } else {
-                    Readout("Target", if (target > 0) formatSize(target) else "--", alignEnd = true)
+                    Readout("Target", if (vm.targetText.isNotEmpty()) vm.targetText + " " + (if (vm.unitMb) "MB" else "KB") else "--", alignEnd = true)
                 }
             }
 
@@ -70,7 +70,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 if (src != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(src.name, Modifier.marquee(), style = Type.title, maxLines = 1)
-                        Text((if (src.kind == Kind.PDF) "PDF" else "Photo") + ", " + formatSize(src.bytes), color = p.mute)
+                        Text((if (src.kind == Kind.PDF) "PDF" else "Photo") + ", " + formatSizeIn(src.bytes, vm.unitMb), color = p.mute)
                     }
                 }
                 PillButton(
@@ -82,7 +82,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
             Rule()
             Section("Target size") {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Field(vm.targetText, vm::onTargetText, "0", Modifier.weight(1f), keyboard = KeyboardType.Decimal)
+                    Field(vm.targetText, vm::onTargetText, "0", Modifier.weight(1f), keyboard = KeyboardType.Decimal, suffix = if (vm.unitMb) "MB" else "KB")
                     Segmented(listOf("KB", "MB"), if (vm.unitMb) 1 else 0, Modifier.width(112.dp)) { vm.onUnit(it == 1) }
                 }
             }
@@ -125,12 +125,12 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
     Rule()
     Section("What changed") {
         when {
-            r.unchanged -> Text("Already under your target, so the file was left as is.", color = p.mute)
+            r.unchanged -> Text("The file is already under your " + (if (vm.targetText.isNotEmpty()) vm.targetText + " " else "") + (if (vm.unitMb) "MB" else "KB") + " target, so it was left as is.", color = p.mute)
             !r.hitTarget -> Text("This is as small as it gets without breaking the file. Try a bigger target.", color = p.accent)
         }
         if (src != null) {
             StatRow(
-                "File size", formatSize(src.bytes), formatSize(r.bytes.size.toLong()),
+                "File size", formatSizeIn(src.bytes, vm.unitMb), formatSizeIn(r.bytes.size.toLong(), vm.unitMb),
                 delta(src.bytes.toDouble(), r.bytes.size.toDouble()),
             )
         }

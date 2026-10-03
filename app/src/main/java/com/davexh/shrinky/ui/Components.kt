@@ -112,6 +112,11 @@ fun formatSize(b: Long): String =
     if (b >= 1_048_576) String.format(Locale.US, "%.1f MB", b / 1_048_576.0)
     else "${(b / 1024).coerceAtLeast(1)} KB"
 
+/** Size in the unit the user picked: whole KB, or MB with two decimals. */
+fun formatSizeIn(b: Long, mb: Boolean): String =
+    if (mb) String.format(Locale.US, "%.2f MB", b / 1_048_576.0)
+    else "${(b / 1024.0).roundToInt()} KB"
+
 fun delta(before: Double, after: Double): String {
     if (before <= 0) return ""
     val d = ((after - before) / before * 100).roundToInt()
@@ -268,7 +273,7 @@ fun Rule() {
     Box(Modifier.padding(vertical = 16.dp).fillMaxWidth().height(1.dp).background(p.stroke))
 }
 
-/** Scrolling body, with the action pill floating over the bottom (above the nav pill). */
+/** Scrolling body. The action pill is the very last thing on the page; the nav pill floats over the bottom. */
 @Composable
 fun ToolScaffold(
     scrollTo: Any?,
@@ -283,20 +288,16 @@ fun ToolScaffold(
             scroll.animateScrollTo(scroll.maxValue, tween(450, easing = FastOutSlowInEasing))
         }
     }
-    Box(Modifier.fillMaxSize()) {
-        Column(
-            Modifier.fillMaxSize()
-                .scrollbar(scroll)
-                .verticalScroll(scroll)
-                .padding(horizontal = 16.dp)
-                .padding(top = 4.dp, bottom = reserve + 80.dp),
-            content = content,
-        )
-        Box(
-            Modifier.align(Alignment.BottomCenter)
-                .padding(horizontal = 16.dp)
-                .padding(bottom = reserve + 8.dp),
-        ) { bar() }
+    Column(
+        Modifier.fillMaxSize()
+            .scrollbar(scroll)
+            .verticalScroll(scroll)
+            .padding(horizontal = 16.dp)
+            .padding(top = 4.dp, bottom = reserve + 24.dp),
+    ) {
+        content()
+        Spacer(Modifier.height(16.dp))
+        bar()
     }
 }
 
@@ -328,7 +329,6 @@ fun ActionBar(
     Box(
         Modifier.fillMaxWidth().height(56.dp)
             .graphicsLayer { alpha = fade }
-            .shadow(6.dp, shape, clip = false, ambientColor = Color(0x33000000), spotColor = Color(0x33000000))
             .clip(shape)
             .background(container),
     ) {
