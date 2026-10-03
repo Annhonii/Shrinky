@@ -18,8 +18,6 @@ A featherlight, distraction-free utility designed to compress, crop, and convert
 
 ---
 
-## 📸 Screenshots
-
 
 ## 🛠️ Feature Breakdown
 
@@ -51,7 +49,7 @@ A featherlight, distraction-free utility designed to compress, crop, and convert
 ## Credits
  The UI typeface is [Geist](https://github.com/vercel/geist-font) by Vercel, under the SIL Open Font License 1.1.
 
-## Screenshots
+## screenshots 
 
 <p align="center">
   <img src="screenshots/1.png" width="30%">
