@@ -252,6 +252,13 @@ class PdfVm(app: Application) : BaseVm(app) {
         stale()
     }
 
+    /** Moves the page at [from] so it ends up at index [to] (used by long-press drag). */
+    fun reorder(from: Int, to: Int) {
+        if (from !in pages.indices || to !in pages.indices || from == to) return
+        pages.add(to, pages.removeAt(from))
+        stale()
+    }
+
     fun remove(i: Int) { if (i in pages.indices) { pages.removeAt(i); stale() } }
 
     fun onA4(v: Boolean) { a4 = v; stale() }
