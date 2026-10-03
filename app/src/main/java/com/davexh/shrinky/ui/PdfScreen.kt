@@ -3,12 +3,16 @@ package com.davexh.shrinky.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -24,8 +28,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -37,7 +43,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -141,14 +149,17 @@ private fun PageList(vm: PdfVm, onOpen: (PageItem) -> Unit) {
     Box(Modifier.fillMaxWidth().height(with(density) { (n * step - ROW_GAP.toPx()).coerceAtLeast(0f).toDp() })) {
         vm.pages.forEachIndexed { i, item ->
             key(item.id) {
+                val appear = remember { Animatable(0f) }
+                LaunchedEffect(Unit) { appear.animateTo(1f, tween(300, easing = FastOutSlowInEasing)) }
                 val dragging = dragId == item.id
-                val settled by animateIntAsState((i * step).roundToInt(), spring(dampingRatio = 0.85f, stiffness = 420f), label = "row")
+                val settled by animateIntAsState((i * step).roundToInt(), spring(dampingRatio = 1f, stiffness = 420f), label = "row")
                 val y = if (dragging) dragY.roundToInt() else settled
 
                 PageRow(
                     item = item,
                     number = i + 1,
                     dragging = dragging,
+                    appear = appear.value,
                     onOpen = { onOpen(item) },
                     onRemove = { vm.remove(vm.pages.indexOfFirst { it.id == item.id }) },
                     modifier = Modifier
@@ -182,7 +193,7 @@ private fun PageList(vm: PdfVm, onOpen: (PageItem) -> Unit) {
 /** Glides the dropped row into its final slot before it hands back to the normal layout. */
 private suspend fun settle(vm: PdfVm, id: Long, step: Float, get: () -> Float, set: (Float) -> Unit) {
     val target = vm.pages.indexOfFirst { it.id == id } * step
-    animate(get(), target, animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f)) { v, _ -> set(v) }
+    animate(get(), target, animationSpec = spring(dampingRatio = 1f, stiffness = 500f)) { v, _ -> set(v) }
 }
 
 @Composable
@@ -190,37 +201,43 @@ private fun PageRow(
     item: PageItem,
     number: Int,
     dragging: Boolean,
+    appear: Float,
     onOpen: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(16.dp)
+    val lift by animateDpAsState(if (dragging) 10.dp else 0.dp, tween(150), label = "lift")
+    val grow by animateFloatAsState(if (dragging) 1.03f else 1f, tween(150), label = "lift-scale")
     Row(
         modifier
             .fillMaxWidth()
             .height(ROW_H)
             .graphicsLayer {
-                val s = if (dragging) 1.03f else 1f
-                scaleX = s; scaleY = s
+                val k = grow * (0.96f + 0.04f * appear)
+                scaleX = k; scaleY = k
+                alpha = appear
             }
-            .background(if (dragging) p.field else p.card, shape)
-            .border(1.dp, if (dragging) p.primary else p.stroke, shape)
+            .shadow(lift, shape, clip = false, ambientColor = Color(0x44000000), spotColor = Color(0x44000000))
             .clip(shape)
+            .background(if (dragging) p.high else p.field, shape)
             .padding(start = 8.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Image(
             remember(item.thumb) { item.thumb.asImageBitmap() }, "Preview",
-            Modifier.size(48.dp).tap { onOpen() }.clip(RoundedCornerShape(10.dp)),
+            Modifier.size(48.dp).tap(shape = RoundedCornerShape(12.dp)) { onOpen() },
             contentScale = ContentScale.Crop,
         )
         Column(Modifier.weight(1f)) {
-            Text(item.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = Type.title)
+            Text(item.name, Modifier.marquee(), maxLines = 1, style = Type.title)
             Text("Page $number", color = p.mute, style = Type.small)
         }
-        IconTap("\u00d7") { onRemove() }
+        Box(Modifier.size(40.dp).tap(shape = CircleShape, dim = true) { onRemove() }, contentAlignment = Alignment.Center) {
+            CloseIcon(p.text)
+        }
         DragGrip()
     }
 }
@@ -247,6 +264,8 @@ private fun PhotoPreview(item: PageItem, number: Int, total: Int, onClose: () ->
         }
         if (full != null) value = full
     }
+    val enter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { enter.animateTo(1f, tween(260, easing = FastOutSlowInEasing)) }
     var scale by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var box by remember { mutableStateOf(IntSize.Zero) }
@@ -261,7 +280,7 @@ private fun PhotoPreview(item: PageItem, number: Int, total: Int, onClose: () ->
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xF2000000))) {
+        Box(Modifier.fillMaxSize().background(Color(0xF2000000))) {
             Image(
                 image, null,
                 Modifier
@@ -279,8 +298,10 @@ private fun PhotoPreview(item: PageItem, number: Int, total: Int, onClose: () ->
                         }
                     }
                     .graphicsLayer {
-                        scaleX = scale; scaleY = scale
+                        val k = scale * (0.94f + 0.06f * enter.value)
+                        scaleX = k; scaleY = k
                         translationX = pan.x; translationY = pan.y
+                        alpha = enter.value
                     },
                 contentScale = ContentScale.Fit,
             )
@@ -290,16 +311,16 @@ private fun PhotoPreview(item: PageItem, number: Int, total: Int, onClose: () ->
             ) {
                 Column(Modifier.weight(1f).padding(start = 8.dp)) {
                     Text(
-                        item.name, color = androidx.compose.ui.graphics.Color.White,
+                        item.name, color = Color.White,
                         style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
-                    Text("Page $number of $total", color = androidx.compose.ui.graphics.Color(0xFFB0B0B0), style = Type.small)
+                    Text("Page $number of $total", color = Color(0xFFB0B0B0), style = Type.small)
                 }
                 Box(
-                    Modifier.size(44.dp).tap { onClose() }
-                        .background(androidx.compose.ui.graphics.Color(0x66000000), androidx.compose.foundation.shape.CircleShape),
+                    Modifier.size(44.dp).tap(shape = CircleShape) { onClose() }
+                        .background(Color(0x66000000), CircleShape),
                     contentAlignment = Alignment.Center,
-                ) { Text("\u00d7", color = androidx.compose.ui.graphics.Color.White, style = Type.headline) }
+                ) { CloseIcon(Color.White, Modifier.size(24.dp)) }
             }
         }
     }

@@ -45,3 +45,9 @@ A featherlight, distraction-free utility designed to compress, crop, and convert
 2. Download the latest `Shrinky.apk` (under 2 MB).
 3. Install and run directly on your Android device.
 
+
+---
+
+## Credits
+
+The look and feel (palette, floating pill navigation, press and slide animations) is modelled on [MissingCore/Music](https://github.com/MissingCore/Music). The UI typeface is [Geist](https://github.com/vercel/geist-font) by Vercel, under the SIL Open Font License 1.1.

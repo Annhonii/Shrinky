@@ -1,25 +1,31 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.davexh.shrinky.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -48,6 +54,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -60,11 +67,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -84,13 +96,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.davexh.shrinky.engine.Saver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 // ---------- formatting ----------
@@ -121,34 +134,106 @@ fun <T : Any> rememberLast(value: T?): T? {
 
 // ---------- motion ----------
 
-private val Bouncy = spring<Float>(dampingRatio = 0.5f, stiffness = 500f)
+/**
+ * Space the floating nav pill takes at the bottom (pill + padding + system inset).
+ * Screens keep their own floating action pill, and their scrolling content, clear of it.
+ */
+val LocalBottomReserve = compositionLocalOf { 72.dp }
 
-/** Press feedback: a springy squish. Must be the OUTERMOST modifier so the whole element scales. */
+/**
+ * Press feedback like the Music app: an Android-style ripple that grows from the touch point,
+ * plus an optional dim (opacity 0.5) for plain text taps. Clips to [shape] so the ripple stays inside.
+ */
 @Composable
-fun Modifier.tap(enabled: Boolean = true, action: () -> Unit): Modifier {
-    var pressed by remember { mutableStateOf(false) }
+fun Modifier.tap(
+    enabled: Boolean = true,
+    shape: Shape = RoundedCornerShape(16.dp),
+    dim: Boolean = false,
+    ripple: Color? = null,
+    action: () -> Unit,
+): Modifier {
+    val p = LocalPalette.current
     val current by rememberUpdatedState(action)
-    val scale by animateFloatAsState(if (pressed) 0.94f else 1f, Bouncy, label = "tap")
+    val scope = rememberCoroutineScope()
+    val grow = remember { Animatable(0f) }
+    val glow = remember { Animatable(0f) }
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    var pressed by remember { mutableStateOf(false) }
+    val opacity by animateFloatAsState(if (pressed && dim) 0.5f else 1f, tween(90), label = "press")
+    val rippleColor = ripple ?: p.high
     return this
-        .graphicsLayer { scaleX = scale; scaleY = scale; alpha = if (pressed) 0.85f else 1f }
+        .graphicsLayer { alpha = opacity }
         .semantics(mergeDescendants = true) { role = Role.Button; onClick { current(); true } }
+        .clip(shape)
+        .drawWithContent {
+            drawContent()
+            if (glow.value > 0f) {
+                drawCircle(
+                    rippleColor.copy(alpha = rippleColor.alpha * 0.6f * glow.value),
+                    radius = size.maxDimension * grow.value,
+                    center = origin,
+                )
+            }
+        }
         .pointerInput(enabled) {
             if (enabled) {
                 detectTapGestures(
-                    onPress = { pressed = true; tryAwaitRelease(); pressed = false },
+                    onPress = { o ->
+                        origin = o
+                        pressed = true
+                        scope.launch {
+                            glow.snapTo(1f)
+                            grow.snapTo(0f)
+                            grow.animateTo(1.2f, tween(320, easing = FastOutSlowInEasing))
+                        }
+                        tryAwaitRelease()
+                        pressed = false
+                        scope.launch { glow.animateTo(0f, tween(260)) }
+                    },
                     onTap = { current() },
                 )
             }
         }
 }
 
-/** Springy expand + fade for sections that come and go inside the card. */
+/** Long names scroll sideways instead of being cut off. */
+fun Modifier.marquee(): Modifier = basicMarquee(iterations = 3)
+
+/** A thin scrollbar that fades in while scrolling and lingers a moment after. Apply BEFORE verticalScroll. */
+@Composable
+fun Modifier.scrollbar(state: ScrollState): Modifier {
+    val p = LocalPalette.current
+    val scrolling = state.isScrollInProgress
+    val visible by animateFloatAsState(
+        if (scrolling) 1f else 0f,
+        tween(durationMillis = if (scrolling) 120 else 400, delayMillis = if (scrolling) 0 else 700),
+        label = "scrollbar",
+    )
+    return drawWithContent {
+        drawContent()
+        val max = state.maxValue
+        if (visible > 0.01f && max > 0) {
+            val view = size.height
+            val h = (view * view / (view + max)).coerceAtLeast(28.dp.toPx())
+            val y = (view - h) * state.value / max
+            val w = 3.dp.toPx()
+            drawRoundRect(
+                p.mute.copy(alpha = 0.55f * visible),
+                Offset(size.width - w - 3.dp.toPx(), y),
+                Size(w, h),
+                CornerRadius(w / 2f),
+            )
+        }
+    }
+}
+
+/** Smooth expand + fade for sections that come and go inside the card. */
 @Composable
 fun Reveal(visible: Boolean, content: @Composable ColumnScope.() -> Unit) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(spring(stiffness = 300f)) + expandVertically(spring(dampingRatio = 0.72f, stiffness = 320f)),
-        exit = fadeOut(spring(stiffness = 500f)) + shrinkVertically(spring(stiffness = 500f)),
+        enter = fadeIn(tween(250)) + expandVertically(tween(320, easing = FastOutSlowInEasing)),
+        exit = fadeOut(tween(150)) + shrinkVertically(tween(250, easing = FastOutSlowInEasing)),
     ) { Column(content = content) }
 }
 
@@ -158,13 +243,12 @@ fun Reveal(visible: Boolean, content: @Composable ColumnScope.() -> Unit) {
 @Composable
 fun SectionCard(content: @Composable ColumnScope.() -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(28.dp)
+    val shape = RoundedCornerShape(24.dp)
     Column(
         Modifier.fillMaxWidth()
-            .background(p.card, shape)
-            .border(1.dp, p.stroke, shape)
             .clip(shape)
-            .padding(20.dp),
+            .background(p.card, shape)
+            .padding(16.dp),
         content = content,
     )
 }
@@ -173,7 +257,7 @@ fun SectionCard(content: @Composable ColumnScope.() -> Unit) {
 fun Section(title: String? = null, content: @Composable ColumnScope.() -> Unit) {
     val p = LocalPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (title != null) Text(title, color = p.mute, style = Type.label)
+        if (title != null) Text(title.uppercase(), color = p.mute, style = Type.em)
         content()
     }
 }
@@ -184,38 +268,41 @@ fun Rule() {
     Box(Modifier.padding(vertical = 16.dp).fillMaxWidth().height(1.dp).background(p.stroke))
 }
 
-/** Scrolling body + sticky action bar. Scrolls to the end once [scrollTo] becomes non-null/changes. */
+/** Scrolling body, with the action pill floating over the bottom (above the nav pill). */
 @Composable
 fun ToolScaffold(
     scrollTo: Any?,
-    bar: @Composable ColumnScope.() -> Unit,
+    bar: @Composable () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val p = LocalPalette.current
+    val reserve = LocalBottomReserve.current
     val scroll = rememberScrollState()
     LaunchedEffect(scrollTo) {
         if (scrollTo != null) {
-            delay(320) // let the result section finish expanding
-            scroll.animateScrollTo(scroll.maxValue, spring(dampingRatio = 0.85f, stiffness = 200f))
+            delay(340) // let the result section finish expanding
+            scroll.animateScrollTo(scroll.maxValue, tween(450, easing = FastOutSlowInEasing))
         }
     }
-    Column(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
         Column(
-            Modifier.weight(1f).verticalScroll(scroll)
-                .padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 16.dp),
+            Modifier.fillMaxSize()
+                .scrollbar(scroll)
+                .verticalScroll(scroll)
+                .padding(horizontal = 16.dp)
+                .padding(top = 4.dp, bottom = reserve + 80.dp),
             content = content,
         )
-        Column(
-            Modifier.fillMaxWidth().background(p.bg)
-                .padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 12.dp),
-            content = bar,
-        )
+        Box(
+            Modifier.align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = reserve + 8.dp),
+        ) { bar() }
     }
 }
 
 private enum class Bar { Busy, Saved, Save, Primary }
 
-/** One primary action that follows the flow: do the thing, then Save, then Saved. */
+/** One primary action that follows the flow: do the thing, then Save, then Saved. A floating pill. */
 @Composable
 fun ActionBar(
     busy: Boolean,
@@ -233,28 +320,74 @@ fun ActionBar(
         hasResult -> Bar.Save
         else -> Bar.Primary
     }
-    AnimatedContent(
-        targetState = state,
-        modifier = Modifier.fillMaxWidth(),
-        transitionSpec = {
-            (fadeIn(spring(stiffness = 300f)) + scaleIn(spring(dampingRatio = 0.6f, stiffness = 400f), initialScale = 0.9f)) togetherWith
-                fadeOut(spring(stiffness = 600f))
-        },
-        label = "action-bar",
-    ) { s ->
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val filled = state == Bar.Primary || state == Bar.Save
+    val container by animateColorAsState(if (filled) p.primary else p.card, tween(250), label = "bar-bg")
+    val fade by animateFloatAsState(if (state == Bar.Primary && !primaryEnabled) 0.25f else 1f, tween(200), label = "bar-fade")
+    val shape = CircleShape
+
+    Box(
+        Modifier.fillMaxWidth().height(56.dp)
+            .graphicsLayer { alpha = fade }
+            .shadow(6.dp, shape, clip = false, ambientColor = Color(0x33000000), spotColor = Color(0x33000000))
+            .clip(shape)
+            .background(container),
+    ) {
+        AnimatedContent(
+            targetState = state,
+            modifier = Modifier.fillMaxSize(),
+            transitionSpec = {
+                (slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(220))) togetherWith
+                    (slideOutVertically(tween(320, easing = FastOutSlowInEasing)) { -it } + fadeOut(tween(150)))
+            },
+            label = "action-bar",
+        ) { s ->
             when (s) {
-                Bar.Busy -> PillButton("Working...", enabled = false) {}
-                Bar.Saved -> {
-                    PillButton("Saved", enabled = false, style = PillStyle.Outlined) {}
+                Bar.Busy -> BarLabel("Working...", p.mute)
+                Bar.Saved -> Column(
+                    Modifier.fillMaxSize().padding(horizontal = 24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Saved", color = p.text, style = Type.button)
                     Text(
-                        savedAs.orEmpty(), Modifier.fillMaxWidth(), color = p.mute, style = Type.small,
-                        textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        savedAs.orEmpty(), color = p.mute, style = Type.tiny,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Bar.Save -> PillButton("Save") { onSave() }
-                Bar.Primary -> PillButton(primary, enabled = primaryEnabled) { onPrimary() }
+                Bar.Save -> BarLabel("Save", p.onPrimary, Modifier.tap(true, CircleShape, ripple = Color(0x33000000)) { onSave() })
+                Bar.Primary -> BarLabel(
+                    primary, p.onPrimary,
+                    Modifier.tap(primaryEnabled, CircleShape, ripple = Color(0x33000000)) { onPrimary() },
+                )
             }
+        }
+        AnimatedVisibility(
+            visible = state == Bar.Busy,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(150)),
+        ) { BusyLine() }
+    }
+}
+
+@Composable
+private fun BarLabel(text: String, color: Color, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize().padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = color, style = Type.button, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** The thin red line along the bottom of the pill (like the mini-player's progress), sweeping while busy. */
+@Composable
+private fun BusyLine() {
+    val p = LocalPalette.current
+    val t = rememberInfiniteTransition(label = "busy")
+    val x by t.animateFloat(-0.35f, 1f, infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing)), label = "sweep")
+    Canvas(Modifier.padding(horizontal = 8.dp).fillMaxWidth().height(2.dp)) {
+        val r = CornerRadius(size.height / 2f)
+        drawRoundRect(p.high, Offset.Zero, size, r)
+        clipRect {
+            drawRoundRect(p.primary, Offset(size.width * x, 0f), Size(size.width * 0.35f, size.height), r)
         }
     }
 }
@@ -309,6 +442,7 @@ fun DotMeter(fraction: Float, cols: Int = 24, rows: Int = 7) {
 
 enum class PillStyle { Filled, Outlined }
 
+/** Rounded-xl button: filled in the primary red, or outlined. Disabled drops to 25% like the Music app. */
 @Composable
 fun PillButton(
     text: String,
@@ -319,27 +453,26 @@ fun PillButton(
 ) {
     val p = LocalPalette.current
     val filled = style == PillStyle.Filled
-    val bg by animateColorAsState(
-        when { !filled -> Color.Transparent; enabled -> p.primary; else -> p.disabled },
-        spring(stiffness = 400f), label = "pill-bg",
-    )
-    val fg = when { !filled -> p.text; enabled -> p.onPrimary; else -> p.mute }
+    val shape = RoundedCornerShape(24.dp)
+    val fade by animateFloatAsState(if (enabled) 1f else 0.25f, tween(200), label = "pill-fade")
     Box(
-        modifier.fillMaxWidth().height(54.dp)
-            .tap(enabled) { onClick() }
-            .clip(CircleShape)
-            .background(bg)
-            .then(if (!filled) Modifier.border(1.dp, p.fieldStroke, CircleShape) else Modifier)
+        modifier.fillMaxWidth().height(48.dp)
+            .graphicsLayer { alpha = fade }
+            .tap(enabled, shape, ripple = if (filled) Color(0x33000000) else null) { onClick() }
+            .then(if (filled) Modifier.background(p.primary, shape) else Modifier.border(1.dp, p.stroke, shape))
             .padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = fg, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            text, color = if (filled) p.onPrimary else p.text, style = Type.button,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
 /**
- * iOS-style segmented control. [position] is fractional (0f..n-1), so the thumb can follow a
- * finger or a pager mid-swipe. Drag anywhere on the bar to slide the thumb.
+ * Segmented control. [position] is fractional (0f..n-1), so the thumb can follow a finger.
+ * Drag anywhere on the bar to slide the thumb.
  */
 @Composable
 fun SlidingSegments(
@@ -365,7 +498,6 @@ fun SlidingSegments(
         modifier.fillMaxWidth().height(height)
             .clip(CircleShape)
             .background(p.field)
-            .border(1.dp, p.fieldStroke, CircleShape)
             .onSizeChanged { widthPx = it.width }
             .pointerInput(n, segPx) {
                 detectTapGestures { o ->
@@ -398,7 +530,7 @@ fun SlidingSegments(
             Modifier.padding(4.dp).fillMaxHeight().width(segDp)
                 .offset { IntOffset(thumbX, 0) }
                 .clip(CircleShape)
-                .background(p.primary),
+                .background(p.inverse),
         ) {
             Row(
                 Modifier.layout { measurable, constraints ->
@@ -408,7 +540,7 @@ fun SlidingSegments(
             ) {
                 labels.forEach { l ->
                     Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                        Text(l, color = p.onPrimary, style = Type.label, maxLines = 1)
+                        Text(l, color = p.onInverse, style = Type.label, maxLines = 1)
                     }
                 }
             }
@@ -416,15 +548,15 @@ fun SlidingSegments(
     }
 }
 
-/** Segmented pill: tap a segment, or grab the thumb and slide it (it settles on the nearest segment with a bounce). */
+/** Segmented picker: tap a segment, or grab the thumb and slide it. The thumb glides over 250ms. */
 @Composable
 fun Segmented(options: List<String>, selected: Int, modifier: Modifier = Modifier, onSelect: (Int) -> Unit) {
     val scope = rememberCoroutineScope()
-    val spec = spring<Float>(dampingRatio = 0.65f, stiffness = 420f)
+    val glide = tween<Float>(250, easing = FastOutSlowInEasing)
     val anim = remember { Animatable(selected.toFloat()) }
     var drag by remember { mutableStateOf<Float?>(null) }
     val last = options.size - 1
-    LaunchedEffect(selected) { anim.animateTo(selected.toFloat(), spec) }
+    LaunchedEffect(selected) { anim.animateTo(selected.toFloat(), glide) }
 
     SlidingSegments(
         labels = options,
@@ -436,11 +568,71 @@ fun Segmented(options: List<String>, selected: Int, modifier: Modifier = Modifie
             val d = drag
             if (d != null) {
                 val idx = d.roundToInt().coerceIn(0, last)
-                scope.launch { anim.snapTo(d); drag = null; anim.animateTo(idx.toFloat(), spec) }
+                scope.launch { anim.snapTo(d); drag = null; anim.animateTo(idx.toFloat(), glide) }
                 if (idx != selected) onSelect(idx)
             }
         },
     )
+}
+
+/**
+ * The floating bottom nav, like the Music app's: a white pill, the active label in red.
+ * A soft thumb slides behind the labels and follows [position] while you swipe the pages.
+ */
+@Composable
+fun NavPill(
+    labels: List<String>,
+    position: Float,
+    modifier: Modifier = Modifier,
+    onTap: (Int) -> Unit,
+    onDrag: (Float) -> Unit,
+    onRelease: () -> Unit,
+) {
+    val p = LocalPalette.current
+    val density = LocalDensity.current
+    var widthPx by remember { mutableIntStateOf(0) }
+    val padPx = with(density) { 4.dp.toPx() }
+    val n = labels.size
+    val segPx = if (widthPx > 0) (widthPx - 2 * padPx) / n else 0f
+    val segDp = with(density) { segPx.toDp() }
+    val shape = CircleShape
+
+    Box(
+        modifier.fillMaxWidth().height(56.dp)
+            .shadow(6.dp, shape, clip = false, ambientColor = Color(0x33000000), spotColor = Color(0x33000000))
+            .clip(shape)
+            .background(p.card)
+            .onSizeChanged { widthPx = it.width }
+            .pointerInput(n, segPx) {
+                detectTapGestures { o ->
+                    if (segPx > 0f) onTap(((o.x - padPx) / segPx).toInt().coerceIn(0, n - 1))
+                }
+            }
+            .pointerInput(n, segPx) {
+                detectHorizontalDragGestures(
+                    onDragEnd = { onRelease() },
+                    onDragCancel = { onRelease() },
+                ) { change, amount ->
+                    change.consume()
+                    if (segPx > 0f) onDrag(amount / segPx)
+                }
+            },
+    ) {
+        Box(
+            Modifier.padding(4.dp).fillMaxHeight().width(segDp)
+                .offset { IntOffset((position * segPx).roundToInt(), 0) }
+                .clip(shape)
+                .background(p.field),
+        )
+        Row(Modifier.fillMaxSize().padding(4.dp)) {
+            labels.forEachIndexed { i, l ->
+                val near = (1f - abs(position - i)).coerceIn(0f, 1f)
+                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                    Text(l, color = lerp(p.text, p.primary, near), style = Type.title, maxLines = 1)
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -449,19 +641,18 @@ fun ChipRow(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         labels.forEachIndexed { i, l ->
             val sel = i == selected
-            val bg by animateColorAsState(if (sel) p.primary else p.field, spring(stiffness = 500f), label = "chip")
+            val bg by animateColorAsState(if (sel) p.inverse else p.field, tween(200), label = "chip-bg")
+            val fg by animateColorAsState(if (sel) p.onInverse else p.text, tween(200), label = "chip-fg")
             Box(
-                Modifier.tap { onSelect(i) }
-                    .clip(CircleShape)
-                    .background(bg)
-                    .border(1.dp, if (sel) Color.Transparent else p.fieldStroke, CircleShape)
+                Modifier.tap(shape = CircleShape) { onSelect(i) }
+                    .background(bg, CircleShape)
                     .padding(horizontal = 16.dp, vertical = 10.dp),
-            ) { Text(l, color = if (sel) p.onPrimary else p.text, style = Type.label) }
+            ) { Text(l, color = fg, style = Type.label) }
         }
     }
 }
 
-/** Looks like an input: filled well, visible border, placeholder, red ring that eases in on focus. */
+/** A filled well (no outline); a red ring eases in on focus. */
 @Composable
 fun Field(
     value: String,
@@ -475,8 +666,8 @@ fun Field(
     val p = LocalPalette.current
     val focus = LocalFocusManager.current
     var focused by remember { mutableStateOf(false) }
-    val ring by animateFloatAsState(if (focused) 1f else 0f, spring(stiffness = 500f), label = "ring")
-    val shape = RoundedCornerShape(18.dp)
+    val ring by animateFloatAsState(if (focused) 1f else 0f, tween(180), label = "ring")
+    val shape = RoundedCornerShape(16.dp)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
@@ -490,7 +681,10 @@ fun Field(
             Row(
                 Modifier.fillMaxWidth()
                     .background(p.field, shape)
-                    .border((1f + ring).dp, lerp(p.fieldStroke, p.accent, ring), shape)
+                    .then(
+                        if (ring > 0.01f) Modifier.border((2f * ring).dp, p.accent.copy(alpha = ring), shape)
+                        else Modifier,
+                    )
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -507,27 +701,37 @@ fun Field(
 @Composable
 fun PickerRow(text: String, action: String, onClick: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(16.dp)
     Row(
         Modifier.fillMaxWidth()
-            .tap { onClick() }
+            .tap(shape = shape) { onClick() }
             .background(p.field, shape)
-            .border(1.dp, p.fieldStroke, shape)
-            .clip(shape)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.width(12.dp))
-        Text(action, style = Type.label)
+        Text(action, color = p.primary, style = Type.label)
     }
 }
 
 @Composable
 fun IconTap(label: String, enabled: Boolean = true, action: () -> Unit) {
     val p = LocalPalette.current
-    Box(Modifier.size(40.dp).tap(enabled) { action() }.clip(CircleShape), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(40.dp).tap(enabled, CircleShape, dim = true) { action() }, contentAlignment = Alignment.Center) {
         Text(label, color = if (enabled) p.text else p.dotOff, style = Type.title)
+    }
+}
+
+/** A thin cross, drawn rather than typed, so it stays crisp at any size. */
+@Composable
+fun CloseIcon(color: Color, modifier: Modifier = Modifier.size(20.dp)) {
+    Canvas(modifier) {
+        val inset = size.minDimension * 0.25f
+        val far = size.minDimension - inset
+        val w = 2.dp.toPx()
+        drawLine(color, Offset(inset, inset), Offset(far, far), w, StrokeCap.Round)
+        drawLine(color, Offset(far, inset), Offset(inset, far), w, StrokeCap.Round)
     }
 }
 
@@ -550,7 +754,7 @@ fun StatRow(label: String, from: String, to: String? = null, delta: String? = nu
     val p = LocalPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(label, color = p.mute)
+            Text(label, color = p.mute, style = Type.small)
             if (!delta.isNullOrEmpty()) Text(delta, color = p.accent, style = Type.label)
         }
         Text(if (to == null) from else "$from  \u2192  $to", style = Type.title)
@@ -565,7 +769,7 @@ fun CompareView(before: ImageBitmap, after: ImageBitmap) {
     Box(
         Modifier.fillMaxWidth()
             .aspectRatio((before.width.toFloat() / before.height).coerceIn(0.6f, 1.8f))
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(p.field)
             .pointerInput(Unit) { detectTapGestures { frac = (it.x / size.width).coerceIn(0f, 1f) } }
             .pointerInput(Unit) {

@@ -55,7 +55,7 @@ fun CropScreen(vm: CropVm, pickFolder: () -> Unit) {
             Section("Photo") {
                 if (src != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(src.name, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(src.name, Modifier.marquee(), style = Type.title, maxLines = 1)
                         Text("${src.origW} \u00d7 ${src.origH}", color = p.mute)
                     }
                 }
@@ -120,7 +120,7 @@ private fun ColumnScope.CropResultBlock(vm: CropVm, r: CropResult, pickFolder: (
             remember(r.preview) { r.preview.asImageBitmap() }, "Cropped photo",
             Modifier.fillMaxWidth()
                 .aspectRatio((r.w.toFloat() / r.h).coerceIn(0.3f, 3f))
-                .clip(RoundedCornerShape(20.dp)),
+                .clip(RoundedCornerShape(16.dp)),
             contentScale = ContentScale.Fit,
         )
         if (src != null) StatRow("Resolution", "${src.origW} \u00d7 ${src.origH}", "${r.w} \u00d7 ${r.h}")

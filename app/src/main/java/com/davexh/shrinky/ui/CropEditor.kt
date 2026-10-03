@@ -33,7 +33,7 @@ fun CropEditor(state: CropState) {
 
     Canvas(
         Modifier.fillMaxWidth().aspectRatio(1f)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(p.field)
             .onSizeChanged { state.view = it }
             .pointerInput(bmp) {

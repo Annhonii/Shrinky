@@ -69,7 +69,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
             Section("File") {
                 if (src != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(src.name, style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(src.name, Modifier.marquee(), style = Type.title, maxLines = 1)
                         Text((if (src.kind == Kind.PDF) "PDF" else "Photo") + ", " + formatSize(src.bytes), color = p.mute)
                     }
                 }
