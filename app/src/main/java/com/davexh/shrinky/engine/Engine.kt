@@ -31,6 +31,8 @@ class Shrunk(
     val afterZoom: Bitmap? = null,
     /** Videos are too big to hold in memory: the result lives in a cache file and [bytes] stays empty. */
     val file: java.io.File? = null,
+    val codecInfo: String? = null,   // e.g. "H.265, AAC"
+    val notice: String? = null,      // e.g. "Your phone can't encode AV1, so H.264 was used."
 ) {
     val size: Long get() = file?.length() ?: bytes.size.toLong()
 }

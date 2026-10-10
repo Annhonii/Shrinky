@@ -8,8 +8,8 @@ import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.effect.Presentation
+import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
@@ -19,7 +19,9 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -34,16 +36,15 @@ class VideoOut(
     val origW: Int, val origH: Int,
     val newW: Int, val newH: Int,
     val before: Bitmap?, val after: Bitmap?,
+    val videoMime: String?, val audioMime: String?,
 )
 
 /**
- * Video compression on top of Media3 Transformer (hardware H.264 encode, no bundled codecs).
+ * Video compression on top of Media3 Transformer (the phone's own encoders, nothing bundled).
  * Target size is turned into a bitrate budget; if the encoder overshoots, it retries with a corrected bitrate.
  */
 object VideoEngine {
-    private const val AUDIO_BPS = 128_000
     private const val MIN_VIDEO_BPS = 100_000
-    private const val BITS_PER_PIXEL = 0.07   // H.264 quality floor that still looks clean at ~30 fps
     private const val ASSUMED_FPS = 30
     private const val SAFETY = 0.93           // container overhead + rate-control slop
     private const val MAX_TRIES = 3
@@ -66,40 +67,41 @@ object VideoEngine {
         }
     }
 
-    /** [maxHeight] = 0 means automatic: pick the resolution the bitrate budget can afford. */
-    suspend fun compress(
-        ctx: Context, uri: Uri, target: Long, maxHeight: Int, onProgress: (Float) -> Unit,
-    ): VideoOut {
-        val info = probe(ctx, uri)
+    suspend fun compress(ctx: Context, req: VideoRequest, onProgress: (Float) -> Unit): VideoOut {
+        val uri = req.source.uri
+        val target = req.target
+        val info = withContext(Dispatchers.IO) { probe(ctx, uri) }
         if (info.durationMs <= 0 || info.width <= 0 || info.height <= 0) error("Can't read this video.")
 
         val seconds = info.durationMs / 1000.0
-        val audioBps = if (info.hasAudio) AUDIO_BPS else 0
+        val audioBps = if (info.hasAudio) req.audio.bps else 0
         var videoBps = ((target * 8 * SAFETY) / seconds).toLong() - audioBps
         if (videoBps < MIN_VIDEO_BPS) error("Target is too small for a video this long. Try a bigger target.")
 
-        val out = File(ctx.cacheDir, "shrinky_video.mp4")
         var best: File? = null
         var bestSize = Long.MAX_VALUE
+        var bestUsed: ExportResult? = null
         var hit = false
         var finalH = info.height
 
         for (attempt in 1..MAX_TRIES) {
             // Resolution follows the bitrate: fewer bits per second means fewer pixels, never upscaling.
-            val pixels = videoBps / (BITS_PER_PIXEL * ASSUMED_FPS)
+            val pixels = videoBps / (req.video.bpp * ASSUMED_FPS)
             val aspect = info.width.toDouble() / info.height
-            var h = (sqrt(pixels / aspect)).roundToInt().coerceAtLeast(240)
-            if (maxHeight > 0) h = minOf(h, maxHeight)
-            h = minOf(h, info.height) and 1.inv()           // even number, as H.264 wants
+            var h = sqrt(pixels / aspect).roundToInt().coerceAtLeast(240)
+            if (req.maxHeight > 0) h = minOf(h, req.maxHeight)
+            h = minOf(h, info.height) and 1.inv()           // even number, as encoders want
             finalH = h
 
             val effects = if (h < info.height) listOf<Effect>(Presentation.createForHeight(h)) else emptyList()
             val tmp = File(ctx.cacheDir, "shrinky_try$attempt.mp4")
-            runTransformer(ctx, uri, tmp, videoBps.toInt(), effects) { onProgress((attempt - 1 + it) / MAX_TRIES) }
+            val used = runTransformer(ctx, uri, tmp, videoBps.toInt(), effects, req, info.hasAudio) {
+                onProgress((attempt - 1 + it) / MAX_TRIES)
+            }
 
             val size = tmp.length()
             if (size < bestSize || size <= target && bestSize > target) {
-                best?.delete(); best = tmp; bestSize = size
+                best?.delete(); best = tmp; bestSize = size; bestUsed = used
             } else tmp.delete()
 
             if (size <= target) { hit = true; break }
@@ -109,16 +111,21 @@ object VideoEngine {
         }
 
         val chosen = best ?: error("Compression failed.")
-        out.delete()
-        if (!chosen.renameTo(out)) { chosen.copyTo(out, overwrite = true); chosen.delete() }
+        val out = File(ctx.cacheDir, "shrinky_video.mp4")
+        withContext(Dispatchers.IO) {
+            out.delete()
+            if (!chosen.renameTo(out)) { chosen.copyTo(out, overwrite = true); chosen.delete() }
+        }
 
-        val after = runCatching { probe(ctx, Uri.fromFile(out)) }.getOrNull()
+        val after = withContext(Dispatchers.IO) { runCatching { probe(ctx, Uri.fromFile(out)) }.getOrNull() }
         val newW = after?.width?.takeIf { it > 0 } ?: (finalH * info.width.toDouble() / info.height).roundToInt()
         val newH = after?.height?.takeIf { it > 0 } ?: finalH
         return VideoOut(
             out, hit, info.width, info.height, newW, newH,
             before = info.frame?.let { Images.thumb(it) },
             after = after?.frame?.let { Images.thumb(it) },
+            videoMime = bestUsed?.videoMimeType,
+            audioMime = bestUsed?.audioMimeType,
         )
     }
 
@@ -128,23 +135,27 @@ object VideoEngine {
 
     /** Transformer must be driven from a thread with a Looper, so everything here runs on the main thread. */
     private suspend fun runTransformer(
-        ctx: Context, uri: Uri, dest: File, bitrate: Int, effects: List<Effect>, onProgress: (Float) -> Unit,
-    ) = suspendCancellableCoroutine<Unit> { cont ->
+        ctx: Context, uri: Uri, dest: File, bitrate: Int, effects: List<Effect>,
+        req: VideoRequest, hasAudio: Boolean, onProgress: (Float) -> Unit,
+    ) = suspendCancellableCoroutine<ExportResult> { cont ->
         val main = Handler(Looper.getMainLooper())
         main.post {
             if (!cont.isActive) return@post
             dest.delete()
             val encoder = DefaultEncoderFactory.Builder(ctx)
                 .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
+                .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(req.audio.bps.coerceAtLeast(64_000)).build())
                 .build()
             lateinit var poll: Runnable
-            val transformer = Transformer.Builder(ctx)
-                .setVideoMimeType(MimeTypes.VIDEO_H264)
+            val builder = Transformer.Builder(ctx)
+                .setVideoMimeType(req.video.mime)
                 .setEncoderFactory(encoder)
+            req.audio.mime?.let { builder.setAudioMimeType(it) }
+            val transformer = builder
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         main.removeCallbacks(poll)
-                        if (cont.isActive) cont.resume(Unit)
+                        if (cont.isActive) cont.resume(exportResult)
                     }
 
                     override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
@@ -158,6 +169,7 @@ object VideoEngine {
 
             val item = EditedMediaItem.Builder(MediaItem.fromUri(uri))
                 .setEffects(Effects(emptyList(), effects))
+                .setRemoveAudio(req.audio == AudioCodec.MUTE && hasAudio)
                 .build()
 
             val holder = ProgressHolder()

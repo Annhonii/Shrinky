@@ -1,5 +1,8 @@
 package com.davexh.shrinky.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -21,21 +24,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.davexh.shrinky.ShrinkVm
+import com.davexh.shrinky.engine.AudioCodec
 import com.davexh.shrinky.engine.Kind
 import com.davexh.shrinky.engine.OutFormat
 import com.davexh.shrinky.engine.Shrunk
+import com.davexh.shrinky.engine.VideoCodec
 
 /** The compress tool: everything lives in one card. */
 @Composable
 fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
     val p = LocalPalette.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { vm.pick(it) }
+    val ctx = LocalContext.current
     val src = vm.source
     val result = vm.result
+    // Android 13+ needs a runtime OK to show the progress notification. Compression runs either way.
+    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.shrink() }
+    val onShrink = {
+        if (src?.kind == Kind.VIDEO && Build.VERSION.SDK_INT >= 33 &&
+            ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.shrink()
+    }
     val shown = rememberLast(result)
     val target = vm.targetBytes
 
@@ -49,7 +63,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
             ActionBar(
                 busy = vm.busy, hasResult = result != null, savedAs = vm.save.savedAs,
                 primary = "Shrink", primaryEnabled = src != null && target >= 5 * 1024,
-                onPrimary = vm::shrink, onSave = vm::saveResult,
+                onPrimary = onShrink, onSave = vm::saveResult,
             )
         },
     ) {
@@ -96,16 +110,23 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
 
             Reveal(src?.kind == Kind.VIDEO) {
                 Rule()
+                Section("Video codec") {
+                    val codecs = remember { VideoCodec.available }
+                    Segmented(codecs.map { it.label }, codecs.indexOf(vm.videoCodec).coerceAtLeast(0)) { vm.onVideoCodec(codecs[it]) }
+                }
+                Rule()
+                Section("Audio") {
+                    val audio = AudioCodec.entries
+                    Segmented(audio.map { it.label }, vm.audioCodec.ordinal) { vm.onAudioCodec(audio[it]) }
+                }
+                Rule()
                 Section("Max resolution") {
                     val steps = listOf(0, 1080, 720, 480)
                     Segmented(listOf("Auto", "1080p", "720p", "480p"), steps.indexOf(vm.maxHeight).coerceAtLeast(0)) { vm.onMaxHeight(steps[it]) }
                 }
             }
 
-            StatusSection(
-                vm.busy, vm.failure,
-                if (src?.kind == Kind.VIDEO && vm.progress > 0f) "Working, ${(vm.progress * 100).toInt()}%" else "Working",
-            )
+            StatusSection(vm.busy, vm.failure)
 
             Reveal(result != null) {
                 if (shown != null) ResultBlock(vm, shown, pickFolder)
@@ -152,6 +173,8 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
                 if (d == "no change" || d.isEmpty()) d else "$d pixels",
             )
         }
+        r.codecInfo?.let { StatRow("Codec", it) }
+        r.notice?.let { Text(it, color = p.accent) }
         if (r.pages > 0) {
             StatRow("Pages", "${r.pages}, saved as images")
             StatRow("Page quality", "${r.dpi} dpi")
