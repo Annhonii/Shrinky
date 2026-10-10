@@ -13,6 +13,7 @@ A featherlight, distraction-free utility designed to compress, crop, and convert
 - ✂️ **Precision Cropping** — Crop to custom width/height dimensions or standard aspect ratios (1:1, 4:5, 16:9, etc.) with instant previews.
 - 📄 **Image to PDF Converter** — Convert single or multiple images directly into clean, standardized PDF documents.
 - 🎞️ **Video Compression** — Shrink videos to a target size on-device. Pick the video codec (H.264, H.265, AV1, VP9 — whatever your phone supports) and audio (original, AAC, Opus, mute). Resolution is picked automatically or capped at 1080p/720p/480p. Runs in the background with a progress notification.
+- 🎧 **Audio Compression** — Shrink audio files to a target size, or convert them: AAC (m4a), Opus, FLAC (lossless) and WAV, with mono/stereo control. Low sizes automatically use HE-AAC where the phone supports it.
 - 📑 **PDF Compression** — Compress heavy PDF files right on your device for fast email attachments and uploads.
 - 🎨 **Pixel × Nothing UI Aesthetic** — Monochromatic accents, clean typography, dot-matrix vibes, and intuitive fluid interactions.
 - 🔒 **100% Offline & Private** — All processing happens locally on your hardware. Your files never touch a remote server.

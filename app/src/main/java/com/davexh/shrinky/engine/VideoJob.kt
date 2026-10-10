@@ -12,9 +12,18 @@ class VideoRequest(
     val maxHeight: Int,
     val video: VideoCodec,
     val audio: AudioCodec,
+    val audioKbps: Int,
     val targetText: String,
     val unitMb: Boolean,
-)
+) {
+    /** Bits per second reserved for the audio track when budgeting the video bitrate. */
+    val audioBps: Int
+        get() = when (audio) {
+            AudioCodec.ORIGINAL -> 128_000
+            AudioCodec.MUTE -> 0
+            else -> audioKbps * 1000
+        }
+}
 
 /**
  * The one running (or last finished) video job. It lives outside any ViewModel so compression keeps going

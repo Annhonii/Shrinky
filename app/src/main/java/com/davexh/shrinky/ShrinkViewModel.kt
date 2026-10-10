@@ -14,6 +14,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.davexh.shrinky.engine.AudioCodec
+import com.davexh.shrinky.engine.AudioEngine
+import com.davexh.shrinky.engine.AudioOut
 import com.davexh.shrinky.engine.CropState
 import com.davexh.shrinky.engine.Engine
 import com.davexh.shrinky.engine.Images
@@ -92,6 +94,9 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     var maxHeight by mutableIntStateOf(0); private set            // video only: 0 = auto, else 1080 / 720 / 480
     var videoCodec by mutableStateOf(VideoCodec.H264); private set  // video only
     var audioCodec by mutableStateOf(AudioCodec.ORIGINAL); private set
+    var audioKbps by mutableIntStateOf(128); private set             // video only: bitrate of the re-encoded audio track
+    var audioOut by mutableStateOf(AudioOut.AAC); private set        // audio files: output format
+    var channels by mutableIntStateOf(0); private set                // audio files: 0 auto, 1 mono, 2 stereo
 
     /** Images and PDFs are computed here; a video result belongs to VideoJob so it survives the app being left. */
     val result: Shrunk?
@@ -104,7 +109,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         // Coming back to a running or finished video job (e.g. the activity was recreated): restore what it was about.
         VideoJob.request?.let { r ->
             source = r.source; targetText = r.targetText; unitMb = r.unitMb
-            maxHeight = r.maxHeight; videoCodec = r.video; audioCodec = r.audio
+            maxHeight = r.maxHeight; videoCodec = r.video; audioCodec = r.audio; audioKbps = r.audioKbps
         }
         viewModelScope.launch { snapshotFlow { VideoJob.running }.collect { busy = it } }
         viewModelScope.launch {
@@ -134,6 +139,9 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     fun onMaxHeight(h: Int) { maxHeight = h; stale() }
     fun onVideoCodec(c: VideoCodec) { videoCodec = c; stale() }
     fun onAudioCodec(c: AudioCodec) { audioCodec = c; stale() }
+    fun onAudioKbps(k: Int) { audioKbps = k; stale() }
+    fun onAudioOut(o: AudioOut) { audioOut = o; stale() }
+    fun onChannels(c: Int) { channels = c; stale() }
 
     fun pick(uri: Uri?) {
         uri ?: return
@@ -144,9 +152,10 @@ class ShrinkVm(app: Application) : BaseVm(app) {
                 mime == "application/pdf" -> Kind.PDF
                 mime.startsWith("image/") -> Kind.IMAGE
                 mime.startsWith("video/") -> Kind.VIDEO
+                mime.startsWith("audio/") || mime == "application/ogg" -> Kind.AUDIO
                 else -> null
             }
-            if (kind == null) { failure = "Only photos, videos and PDFs are supported."; return@launch }
+            if (kind == null) { failure = "Only photos, videos, audio and PDFs are supported."; return@launch }
             VideoJob.clear()
             VideoEngine.clearCache(getApplication())
             val (name, size) = queryMeta(cr, uri)
@@ -170,6 +179,16 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         localResult = null
         save.reset("")
         if (s.kind == Kind.VIDEO) { shrinkVideo(s, t); return }
+        if (s.kind == Kind.AUDIO) {
+            val out = audioOut
+            val ch = channels
+            val app = getApplication<Application>()
+            work {
+                localResult = AudioEngine.compress(app, s.uri, t, out, ch)
+                save.reset(s.name.substringBeforeLast('.') + "_shrunk")
+            }
+            return
+        }
         work {
             localResult = Engine.compress(cr, s.uri, s.kind, s.mime, s.bytes, t, f)
             save.reset(s.name.substringBeforeLast('.') + "_shrunk")
@@ -182,7 +201,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         failure = null
         val app = getApplication<Application>()
         VideoEngine.clearCache(app)
-        VideoJob.begin(VideoRequest(s, target, maxHeight, videoCodec, audioCodec, targetText, unitMb))
+        VideoJob.begin(VideoRequest(s, target, maxHeight, videoCodec, audioCodec, audioKbps, targetText, unitMb))
         try {
             app.startForegroundService(Intent(app, CompressService::class.java))
         } catch (e: Throwable) {

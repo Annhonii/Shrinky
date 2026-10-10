@@ -45,7 +45,7 @@ import kotlinx.coroutines.delay
  * Tap the picture to play or pause, tap or drag the bar to seek. Pauses when the app leaves the screen.
  */
 @Composable
-fun VideoPlayer(uri: Uri, aspect: Float, modifier: Modifier = Modifier) {
+fun VideoPlayer(uri: Uri, aspect: Float, modifier: Modifier = Modifier, audioOnly: Boolean = false) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
     val viewRef = remember(uri) { arrayOfNulls<VideoView>(1) }
@@ -77,7 +77,7 @@ fun VideoPlayer(uri: Uri, aspect: Float, modifier: Modifier = Modifier) {
     }
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.fillMaxWidth().aspectRatio(aspect.coerceIn(0.4f, 2.5f)).background(Color.Black)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(aspect.coerceIn(0.4f, 2.5f)).background(if (audioOnly) p.card else Color.Black)) {
             AndroidView(
                 factory = { c ->
                     VideoView(c).apply {

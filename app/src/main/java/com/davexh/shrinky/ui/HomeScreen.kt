@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.davexh.shrinky.ShrinkVm
 import com.davexh.shrinky.engine.AudioCodec
+import com.davexh.shrinky.engine.AudioOut
 import com.davexh.shrinky.engine.Kind
 import com.davexh.shrinky.engine.OutFormat
 import com.davexh.shrinky.engine.Shrunk
@@ -87,13 +88,13 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 if (src != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(src.name, Modifier.marquee(), style = Type.title, maxLines = 1)
-                        Text((when (src.kind) { Kind.PDF -> "PDF"; Kind.VIDEO -> "Video"; Kind.IMAGE -> "Photo" }) + ", " + formatSizeIn(src.bytes, vm.unitMb), color = p.mute)
+                        Text((when (src.kind) { Kind.PDF -> "PDF"; Kind.VIDEO -> "Video"; Kind.AUDIO -> "Audio"; Kind.IMAGE -> "Photo" }) + ", " + formatSizeIn(src.bytes, vm.unitMb), color = p.mute)
                     }
                 }
                 PillButton(
                     if (src == null) "Choose file" else "Change file",
                     style = if (src == null) PillStyle.Filled else PillStyle.Outlined,
-                ) { picker.launch(arrayOf("image/*", "video/*", "application/pdf")) }
+                ) { picker.launch(arrayOf("image/*", "video/*", "audio/*", "application/ogg", "application/pdf")) }
             }
 
             Rule()
@@ -111,6 +112,19 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 }
             }
 
+            Reveal(src?.kind == Kind.AUDIO) {
+                Rule()
+                Section("Output format") {
+                    val formats = remember { AudioOut.available }
+                    Segmented(formats.map { it.label }, formats.indexOf(vm.audioOut).coerceAtLeast(0)) { vm.onAudioOut(formats[it]) }
+                    Text(vm.audioOut.hint, color = p.mute)
+                }
+                Rule()
+                Section("Channels") {
+                    Segmented(listOf("Auto", "Mono", "Stereo"), vm.channels) { vm.onChannels(it) }
+                }
+            }
+
             Reveal(src?.kind == Kind.VIDEO) {
                 Rule()
                 Section("Video codec") {
@@ -121,6 +135,13 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 Section("Audio") {
                     val audio = AudioCodec.entries
                     Segmented(audio.map { it.label }, vm.audioCodec.ordinal) { vm.onAudioCodec(audio[it]) }
+                }
+                Reveal(vm.audioCodec == AudioCodec.AAC || vm.audioCodec == AudioCodec.OPUS) {
+                    Rule()
+                    Section("Audio bitrate") {
+                        val steps = listOf(64, 96, 128, 192)
+                        Segmented(steps.map { "${it}k" }, steps.indexOf(vm.audioKbps).coerceAtLeast(0)) { vm.onAudioKbps(steps[it]) }
+                    }
                 }
                 Rule()
                 Section("Max resolution") {
@@ -160,16 +181,21 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
     val file = r.file
     if (file != null && src != null) {
         Rule()
-        Section("Play video") {
+        Section(if (src.kind == Kind.AUDIO) "Play audio" else "Play video") {
             var open by remember(r) { mutableStateOf(false) }
             var which by remember(r) { mutableIntStateOf(0) }
             if (!open) {
-                PillButton("Play compressed video", style = PillStyle.Outlined) { open = true }
+                PillButton(if (src.kind == Kind.AUDIO) "Play compressed audio" else "Play compressed video", style = PillStyle.Outlined) { open = true }
             } else {
                 Segmented(listOf("Compressed", "Original"), which) { which = it }
                 val uri = if (which == 0) Uri.fromFile(file) else src.uri
-                val aspect = if (which == 0) r.newW.toFloat() / r.newH.coerceAtLeast(1) else r.origW.toFloat() / r.origH.coerceAtLeast(1)
-                key(which) { VideoPlayer(uri, aspect) }
+                val isAudio = src.kind == Kind.AUDIO
+                val aspect = when {
+                    isAudio -> 2.5f
+                    which == 0 -> r.newW.toFloat() / r.newH.coerceAtLeast(1)
+                    else -> r.origW.toFloat() / r.origH.coerceAtLeast(1)
+                }
+                key(which) { VideoPlayer(uri, aspect, audioOnly = isAudio) }
             }
         }
     }

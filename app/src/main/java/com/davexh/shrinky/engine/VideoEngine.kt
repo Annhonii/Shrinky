@@ -75,7 +75,7 @@ object VideoEngine {
         if (info.durationMs <= 0 || info.width <= 0 || info.height <= 0) error("Can't read this video.")
 
         val seconds = info.durationMs / 1000.0
-        val audioBps = if (info.hasAudio) req.audio.bps else 0
+        val audioBps = if (info.hasAudio) req.audioBps else 0
         var videoBps = ((target * 8 * SAFETY) / seconds).toLong() - audioBps
         if (videoBps < MIN_VIDEO_BPS) error("Target is too small for a video this long. Try a bigger target.")
 
@@ -145,7 +145,7 @@ object VideoEngine {
             dest.delete()
             val encoder = DefaultEncoderFactory.Builder(ctx)
                 .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
-                .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(req.audio.bps.coerceAtLeast(64_000)).build())
+                .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(req.audioBps.takeIf { it > 0 } ?: 128_000).build())
                 .build()
             lateinit var poll: Runnable
             val builder = Transformer.Builder(ctx)

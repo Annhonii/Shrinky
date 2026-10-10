@@ -8,7 +8,7 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import kotlin.math.roundToInt
 
-enum class Kind { IMAGE, PDF, VIDEO }
+enum class Kind { IMAGE, PDF, VIDEO, AUDIO }
 
 enum class OutFormat(val label: String, val mime: String, val ext: String) {
     JPG("JPG", "image/jpeg", "jpg"),
@@ -62,6 +62,7 @@ object Engine {
             Kind.IMAGE -> compressImage(cr, uri, target, format)
             Kind.PDF -> compressPdf(cr, uri, target)
             Kind.VIDEO -> error("Videos are compressed by VideoEngine.")
+            Kind.AUDIO -> error("Audio is compressed by AudioEngine.")
         }
     }
 
