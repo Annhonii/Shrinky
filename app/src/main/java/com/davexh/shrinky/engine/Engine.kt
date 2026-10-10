@@ -8,7 +8,7 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import kotlin.math.roundToInt
 
-enum class Kind { IMAGE, PDF }
+enum class Kind { IMAGE, PDF, VIDEO }
 
 enum class OutFormat(val label: String, val mime: String, val ext: String) {
     JPG("JPG", "image/jpeg", "jpg"),
@@ -29,7 +29,11 @@ class Shrunk(
     val after: Bitmap? = null,
     val beforeZoom: Bitmap? = null,
     val afterZoom: Bitmap? = null,
-)
+    /** Videos are too big to hold in memory: the result lives in a cache file and [bytes] stays empty. */
+    val file: java.io.File? = null,
+) {
+    val size: Long get() = file?.length() ?: bytes.size.toLong()
+}
 
 object Engine {
     private const val MIN_Q = 40
@@ -55,6 +59,7 @@ object Engine {
         return when (kind) {
             Kind.IMAGE -> compressImage(cr, uri, target, format)
             Kind.PDF -> compressPdf(cr, uri, target)
+            Kind.VIDEO -> error("Videos are compressed by VideoEngine.")
         }
     }
 

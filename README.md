@@ -1,6 +1,6 @@
 # ⚡ Shrinky
 
-A featherlight, distraction-free utility designed to compress, crop, and convert images and PDFs without breaking a sweat. Built with a sleek design language inspired by Google Pixel’s Material You and Nothing OS minimalism.
+A featherlight, distraction-free utility designed to compress, crop, and convert images, videos and PDFs without breaking a sweat. Built with a sleek design language inspired by Google Pixel’s Material You and Nothing OS minimalism.
 
 > ⚠️ **Disclaimer:** This app is 100% **vibe-coded**, and yes, this `README.md` was also written by an AI. Built fast, built light, and fueled entirely by vibes.
 
@@ -12,6 +12,7 @@ A featherlight, distraction-free utility designed to compress, crop, and convert
 - 📉 **Intelligent Image Compression** — Shrink high-res photos down to your exact target size without turning them into pixelated mush.
 - ✂️ **Precision Cropping** — Crop to custom width/height dimensions or standard aspect ratios (1:1, 4:5, 16:9, etc.) with instant previews.
 - 📄 **Image to PDF Converter** — Convert single or multiple images directly into clean, standardized PDF documents.
+- 🎞️ **Video Compression** — Shrink videos to a target size with an on-device hardware H.264 re-encode. Resolution is picked automatically (or capped at 1080p/720p/480p).
 - 📑 **PDF Compression** — Compress heavy PDF files right on your device for fast email attachments and uploads.
 - 🎨 **Pixel × Nothing UI Aesthetic** — Monochromatic accents, clean typography, dot-matrix vibes, and intuitive fluid interactions.
 - 🔒 **100% Offline & Private** — All processing happens locally on your hardware. Your files never touch a remote server.

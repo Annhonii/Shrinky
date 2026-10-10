@@ -61,4 +61,8 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    // Video compression (hardware H.264 re-encode). Only the three modules needed, to keep the APK small.
+    implementation("androidx.media3:media3-transformer:1.5.1")
+    implementation("androidx.media3:media3-effect:1.5.1")
+    implementation("androidx.media3:media3-common:1.5.1")
 }

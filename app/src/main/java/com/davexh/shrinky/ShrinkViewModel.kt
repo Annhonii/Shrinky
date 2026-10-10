@@ -5,6 +5,7 @@ import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -19,8 +20,11 @@ import com.davexh.shrinky.engine.OutFormat
 import com.davexh.shrinky.engine.PdfMaker
 import com.davexh.shrinky.engine.Saver
 import com.davexh.shrinky.engine.Shrunk
+import com.davexh.shrinky.engine.VideoEngine
 import com.davexh.shrinky.engine.queryMeta
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -58,6 +62,18 @@ abstract class BaseVm(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    protected fun writeFile(ext: String, mime: String, file: java.io.File) {
+        val name = Saver.fileName(save.name, ext)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                Saver.save(cr, name, mime, file)
+                save.savedAs = Saver.label + "/" + name
+            } catch (e: Throwable) {
+                failure = "Couldn't save: ${e.message}"
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Shrink
@@ -70,6 +86,9 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     var targetText by mutableStateOf(""); private set
     var unitMb by mutableStateOf(false); private set
     var format by mutableStateOf(OutFormat.JPG); private set
+    var maxHeight by mutableIntStateOf(0); private set          // video only: 0 = auto, else 1080 / 720 / 480
+    var progress by mutableFloatStateOf(0f); private set        // video only: 0..1
+    private var videoJob: Job? = null
 
     val targetBytes: Long
         get() = ((targetText.toDoubleOrNull() ?: 0.0) * if (unitMb) 1_048_576.0 else 1024.0).toLong()
@@ -79,6 +98,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     fun onTargetText(v: String) { targetText = v.filter { it.isDigit() || it == '.' }.take(7); stale() }
     fun onUnit(mb: Boolean) { unitMb = mb; stale() }
     fun onFormat(f: OutFormat) { format = f; stale() }
+    fun onMaxHeight(h: Int) { maxHeight = h; stale() }
 
     fun pick(uri: Uri?) {
         uri ?: return
@@ -87,9 +107,12 @@ class ShrinkVm(app: Application) : BaseVm(app) {
             val kind = when {
                 mime == "application/pdf" -> Kind.PDF
                 mime.startsWith("image/") -> Kind.IMAGE
+                mime.startsWith("video/") -> Kind.VIDEO
                 else -> null
             }
-            if (kind == null) { failure = "Only photos and PDFs are supported."; return@launch }
+            if (kind == null) { failure = "Only photos, videos and PDFs are supported."; return@launch }
+            videoJob?.cancel()
+            discardVideo()
             val (name, size) = queryMeta(cr, uri)
             source = Source(uri, name, size, kind, mime)
             format = when (mime) {
@@ -110,15 +133,51 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         val f = format
         result = null
         save.savedAs = null
+        if (s.kind == Kind.VIDEO) { shrinkVideo(s, t); return }
         work {
             result = Engine.compress(cr, s.uri, s.kind, s.mime, s.bytes, t, f)
             save.reset(s.name.substringBeforeLast('.') + "_shrunk")
         }
     }
 
+    private fun shrinkVideo(s: Source, target: Long) {
+        if (s.bytes in 1..target) { failure = "This video is already under your target size."; return }
+        val app = getApplication<Application>()
+        busy = true; failure = null; progress = 0f
+        discardVideo()
+        videoJob = viewModelScope.launch {
+            try {
+                val out = VideoEngine.compress(app, s.uri, target, maxHeight) { progress = it }
+                result = Shrunk(
+                    ByteArray(0), "video/mp4", "mp4", out.hitTarget,
+                    origW = out.origW, origH = out.origH, newW = out.newW, newH = out.newH,
+                    before = out.before, after = out.after, file = out.file,
+                )
+                save.reset(s.name.substringBeforeLast('.') + "_shrunk")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                failure = e.message ?: "Couldn't compress this video."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private fun discardVideo() {
+        result?.file?.delete()
+        VideoEngine.clearCache(getApplication())
+    }
+
+    override fun onCleared() {
+        videoJob?.cancel()
+        VideoEngine.clearCache(getApplication())
+    }
+
     fun saveResult() {
         val r = result ?: return
-        writeFile(r.ext, r.mime, r.bytes)
+        val f = r.file
+        if (f != null) writeFile(r.ext, r.mime, f) else writeFile(r.ext, r.mime, r.bytes)
     }
 }
 

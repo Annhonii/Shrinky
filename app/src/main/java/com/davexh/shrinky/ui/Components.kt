@@ -393,14 +393,14 @@ private fun BusyLine() {
 }
 
 @Composable
-fun StatusSection(busy: Boolean, failure: String?) {
+fun StatusSection(busy: Boolean, failure: String?, label: String = "Working") {
     val p = LocalPalette.current
     Reveal(busy || failure != null) {
         Rule()
         if (busy) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 WorkingDots()
-                Text("Working", color = p.mute)
+                Text(label, color = p.mute)
             }
         } else if (failure != null) {
             Text(failure, color = p.accent)

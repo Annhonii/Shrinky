@@ -62,7 +62,14 @@ object Saver {
         return base.ifEmpty { "shrinky" } + "." + ext
     }
 
-    fun save(cr: ContentResolver, name: String, mime: String, bytes: ByteArray) {
+    fun save(cr: ContentResolver, name: String, mime: String, bytes: ByteArray) =
+        save(cr, name, mime) { out -> out.write(bytes) }
+
+    /** Streams a file to the destination, for results too large to hold in memory (video). */
+    fun save(cr: ContentResolver, name: String, mime: String, file: java.io.File) =
+        save(cr, name, mime) { out -> file.inputStream().use { it.copyTo(out) } }
+
+    private fun save(cr: ContentResolver, name: String, mime: String, write: (java.io.OutputStream) -> Unit) {
         val tree = folder
         val created: Uri? = if (tree == null) {
             val values = ContentValues().apply {
@@ -76,6 +83,6 @@ object Saver {
             DocumentsContract.createDocument(cr, dir, mime, name)
         }
         val uri = created ?: error("Can't create the file in that location.")
-        cr.openOutputStream(uri)!!.use { it.write(bytes) }
+        cr.openOutputStream(uri)!!.use(write)
     }
 }

@@ -39,7 +39,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
     val shown = rememberLast(result)
     val target = vm.targetBytes
 
-    val fillTo = result?.bytes?.size?.toLong() ?: target
+    val fillTo = result?.size ?: target
     val fraction = if (src != null && src.bytes > 0) fillTo.toFloat() / src.bytes else 0f
     val meter by animateFloatAsState(fraction.coerceIn(0f, 1f), spring(dampingRatio = 0.6f, stiffness = 150f), label = "meter")
 
@@ -59,7 +59,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Readout("Original", src?.let { formatSizeIn(it.bytes, vm.unitMb) } ?: "--")
                 if (result != null) {
-                    Readout("Result", formatSizeIn(result.bytes.size.toLong(), vm.unitMb), alignEnd = true, warn = !result.hitTarget)
+                    Readout("Result", formatSizeIn(result.size, vm.unitMb), alignEnd = true, warn = !result.hitTarget)
                 } else {
                     Readout("Target", if (vm.targetText.isNotEmpty()) vm.targetText + " " + (if (vm.unitMb) "MB" else "KB") else "--", alignEnd = true)
                 }
@@ -70,13 +70,13 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 if (src != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(src.name, Modifier.marquee(), style = Type.title, maxLines = 1)
-                        Text((if (src.kind == Kind.PDF) "PDF" else "Photo") + ", " + formatSizeIn(src.bytes, vm.unitMb), color = p.mute)
+                        Text((when (src.kind) { Kind.PDF -> "PDF"; Kind.VIDEO -> "Video"; Kind.IMAGE -> "Photo" }) + ", " + formatSizeIn(src.bytes, vm.unitMb), color = p.mute)
                     }
                 }
                 PillButton(
                     if (src == null) "Choose file" else "Change file",
                     style = if (src == null) PillStyle.Filled else PillStyle.Outlined,
-                ) { picker.launch(arrayOf("image/*", "application/pdf")) }
+                ) { picker.launch(arrayOf("image/*", "video/*", "application/pdf")) }
             }
 
             Rule()
@@ -94,7 +94,18 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 }
             }
 
-            StatusSection(vm.busy, vm.failure)
+            Reveal(src?.kind == Kind.VIDEO) {
+                Rule()
+                Section("Max resolution") {
+                    val steps = listOf(0, 1080, 720, 480)
+                    Segmented(listOf("Auto", "1080p", "720p", "480p"), steps.indexOf(vm.maxHeight).coerceAtLeast(0)) { vm.onMaxHeight(steps[it]) }
+                }
+            }
+
+            StatusSection(
+                vm.busy, vm.failure,
+                if (src?.kind == Kind.VIDEO && vm.progress > 0f) "Working, ${(vm.progress * 100).toInt()}%" else "Working",
+            )
 
             Reveal(result != null) {
                 if (shown != null) ResultBlock(vm, shown, pickFolder)
@@ -130,8 +141,8 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
         }
         if (src != null) {
             StatRow(
-                "File size", formatSizeIn(src.bytes, vm.unitMb), formatSizeIn(r.bytes.size.toLong(), vm.unitMb),
-                delta(src.bytes.toDouble(), r.bytes.size.toDouble()),
+                "File size", formatSizeIn(src.bytes, vm.unitMb), formatSizeIn(r.size, vm.unitMb),
+                delta(src.bytes.toDouble(), r.size.toDouble()),
             )
         }
         if (r.origW > 0) {
