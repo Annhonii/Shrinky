@@ -2,6 +2,7 @@ package com.davexh.shrinky.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,7 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -151,6 +154,23 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
         Section("Preview") {
             if (hasZoom) Segmented(listOf("Fit", "100%"), view) { view = it }
             CompareView(remember(b) { b.asImageBitmap() }, remember(a) { a.asImageBitmap() })
+        }
+    }
+
+    val file = r.file
+    if (file != null && src != null) {
+        Rule()
+        Section("Play video") {
+            var open by remember(r) { mutableStateOf(false) }
+            var which by remember(r) { mutableIntStateOf(0) }
+            if (!open) {
+                PillButton("Play compressed video", style = PillStyle.Outlined) { open = true }
+            } else {
+                Segmented(listOf("Compressed", "Original"), which) { which = it }
+                val uri = if (which == 0) Uri.fromFile(file) else src.uri
+                val aspect = if (which == 0) r.newW.toFloat() / r.newH.coerceAtLeast(1) else r.origW.toFloat() / r.origH.coerceAtLeast(1)
+                key(which) { VideoPlayer(uri, aspect) }
+            }
         }
     }
 
