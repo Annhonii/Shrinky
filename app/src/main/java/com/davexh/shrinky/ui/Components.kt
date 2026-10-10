@@ -8,6 +8,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -73,6 +74,11 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import kotlin.math.PI
+import kotlin.math.sin
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
@@ -377,18 +383,31 @@ private fun BarLabel(text: String, color: Color, modifier: Modifier = Modifier) 
     }
 }
 
-/** The thin red line along the bottom of the pill (like the mini-player's progress), sweeping while busy. */
+/** Two soft waves flowing along the bottom of the pill while busy; they calm down towards both ends. */
 @Composable
 private fun BusyLine() {
     val p = LocalPalette.current
     val t = rememberInfiniteTransition(label = "busy")
-    val x by t.animateFloat(-0.35f, 1f, infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing)), label = "sweep")
-    Canvas(Modifier.padding(horizontal = 8.dp).fillMaxWidth().height(2.dp)) {
-        val r = CornerRadius(size.height / 2f)
-        drawRoundRect(p.high, Offset.Zero, size, r)
-        clipRect {
-            drawRoundRect(p.primary, Offset(size.width * x, 0f), Size(size.width * 0.35f, size.height), r)
+    val phase by t.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(1500, easing = LinearEasing)), label = "phase")
+    val swell by t.animateFloat(0.5f, 1f, infiniteRepeatable(tween(1700, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "swell")
+    Canvas(Modifier.padding(horizontal = 28.dp).padding(bottom = 6.dp).fillMaxWidth().height(14.dp)) {
+        val mid = size.height / 2f
+        val wavelength = size.width / 3f
+        fun wave(color: Color, ph: Float, amp: Float, width: Float) {
+            val path = Path()
+            var x = 0f
+            while (true) {
+                val envelope = sin(PI * (x / size.width)).toFloat()
+                val y = mid + amp * envelope * sin((2 * PI * x / wavelength) + ph).toFloat()
+                if (x == 0f) path.moveTo(x, y) else path.lineTo(x, y)
+                if (x >= size.width) break
+                x = minOf(x + 3f, size.width)
+            }
+            drawPath(path, color, style = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
+        val amp = (mid - 3.dp.toPx()) * swell
+        wave(p.high, -phase + 1.3f, amp * 0.8f, 2.dp.toPx())
+        wave(p.primary, phase, amp, 2.5.dp.toPx())
     }
 }
 

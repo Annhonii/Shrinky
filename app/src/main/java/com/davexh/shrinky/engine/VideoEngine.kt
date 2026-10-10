@@ -67,7 +67,8 @@ object VideoEngine {
         }
     }
 
-    suspend fun compress(ctx: Context, req: VideoRequest, onProgress: (Float) -> Unit): VideoOut {
+    /** [onProgress] gets (pass number, 0..1 within that pass): a retry pass starts again from 0. */
+    suspend fun compress(ctx: Context, req: VideoRequest, onProgress: (Int, Float) -> Unit): VideoOut {
         val uri = req.source.uri
         val target = req.target
         val info = withContext(Dispatchers.IO) { probe(ctx, uri) }
@@ -96,7 +97,7 @@ object VideoEngine {
             val effects = if (h < info.height) listOf<Effect>(Presentation.createForHeight(h)) else emptyList()
             val tmp = File(ctx.cacheDir, "shrinky_try$attempt.mp4")
             val used = runTransformer(ctx, uri, tmp, videoBps.toInt(), effects, req, info.hasAudio) {
-                onProgress((attempt - 1 + it) / MAX_TRIES)
+                onProgress(attempt, it)
             }
 
             val size = tmp.length()

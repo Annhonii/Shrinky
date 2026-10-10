@@ -12,6 +12,7 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import com.davexh.shrinky.engine.AudioCodec
 import com.davexh.shrinky.engine.Shrunk
 import com.davexh.shrinky.engine.VideoCodec
@@ -33,7 +34,9 @@ class CompressService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    private var lastPct = -1
+    private var lastText: String? = null
+    private var pass = 0
+    private var passStart = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -44,7 +47,7 @@ class CompressService : Service() {
             return START_NOT_STICKY
         }
         // A service started with startForegroundService() must call startForeground() right away, whatever happens next.
-        goForeground(0)
+        goForeground()
         val req = VideoJob.request
         if (req == null || !VideoJob.running || job?.isActive == true) {
             if (job?.isActive != true) finishService()
@@ -54,12 +57,15 @@ class CompressService : Service() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "shrinky:compress").apply { acquire(6 * 60 * 60 * 1000L) }
 
+        pass = 0; lastText = null; passStart = SystemClock.elapsedRealtime()
         job = scope.launch {
             try {
-                val out = VideoEngine.compress(applicationContext, req) { p ->
+                val out = VideoEngine.compress(applicationContext, req) { attempt, p ->
+                    if (attempt != pass) { pass = attempt; passStart = SystemClock.elapsedRealtime(); lastText = null }
                     VideoJob.progress = p
                     val pct = (p * 100).toInt().coerceIn(0, 100)
-                    if (pct != lastPct) { lastPct = pct; notifyProgress(pct) }
+                    val text = progressText(attempt, pct, p)
+                    if (text != lastText) { lastText = text; notifyProgress(pct, text) }
                 }
                 VideoJob.succeed(
                     Shrunk(
@@ -84,6 +90,25 @@ class CompressService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    /** "42% · 3 min left". The estimate is elapsed time scaled by what's left, so it settles after a few seconds. */
+    private fun progressText(attempt: Int, pct: Int, p: Float): String {
+        val elapsed = (SystemClock.elapsedRealtime() - passStart) / 1000.0
+        val eta = if (p >= 0.03f && elapsed >= 3) etaLabel((elapsed * (1 - p) / p).toLong()) else null
+        return buildString {
+            append("$pct%")
+            if (attempt > 1) append(" · adjusting size, pass $attempt")
+            append(if (eta != null) " · $eta left" else " · estimating time")
+        }
+    }
+
+    // Coarse steps so the notification isn't rewritten every second.
+    private fun etaLabel(sec: Long): String = when {
+        sec < 10 -> "a few sec"
+        sec < 60 -> "${(sec + 4) / 5 * 5} sec"
+        sec < 3600 -> "${(sec + 59) / 60} min"
+        else -> "${sec / 3600} h ${(sec % 3600 + 59) / 60} min"
     }
 
     private fun fallbackNotice(v: VideoCodec, a: AudioCodec, usedV: String?, usedA: String?): String? {
@@ -126,7 +151,7 @@ class CompressService : Service() {
         return PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    private fun progressNotification(pct: Int): Notification {
+    private fun progressNotification(pct: Int, text: String): Notification {
         val cancel = PendingIntent.getService(
             this, 1, Intent(this, CompressService::class.java).setAction(ACTION_CANCEL),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -134,7 +159,7 @@ class CompressService : Service() {
         val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_shrinky)
             .setContentTitle("Compressing video")
-            .setContentText("$pct%")
+            .setContentText(text)
             .setSubText(VideoJob.request?.source?.name)
             .setProgress(100, pct, false)
             .setOngoing(true)
@@ -148,15 +173,15 @@ class CompressService : Service() {
         return b.build()
     }
 
-    private fun goForeground(pct: Int) {
+    private fun goForeground() {
         ensureChannel()
-        val n = progressNotification(pct)
+        val n = progressNotification(0, "Starting")
         if (Build.VERSION.SDK_INT >= 29) startForeground(ID_PROGRESS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(ID_PROGRESS, n)
     }
 
-    private fun notifyProgress(pct: Int) {
-        manager().notify(ID_PROGRESS, progressNotification(pct))
+    private fun notifyProgress(pct: Int, text: String) {
+        manager().notify(ID_PROGRESS, progressNotification(pct, text))
     }
 
     private fun postDone(title: String, text: String) {
