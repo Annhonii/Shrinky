@@ -82,6 +82,10 @@ object AudioEngine {
         )
     }
 
+    /** Smallest size a lossy format can reach at its lowest bitrate. */
+    fun smallest(ctx: Context, uri: Uri, out: AudioOut): Long =
+        ((minBitrate(out) * durationSec(ctx, uri)) / 8 / SAFETY).toLong()
+
     private class Run(val desc: String, val notice: String?)
 
     private fun minBitrate(o: AudioOut) = if (o == AudioOut.OPUS) 6_000 else 8_000

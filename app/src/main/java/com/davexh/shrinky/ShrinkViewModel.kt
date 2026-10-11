@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.isActive
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +104,13 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     val result: Shrunk?
         get() = if (source?.kind == Kind.VIDEO) VideoJob.result else ToolJob.result
 
+    // "Smallest possible" hint shown under the target field.
+    var floorBytes by mutableStateOf<Long?>(null); private set
+    var floorLabel by mutableStateOf("Smallest possible"); private set
+    var floorTappable by mutableStateOf(true); private set
+    var floorBusy by mutableStateOf(false); private set
+    private var floorJob: kotlinx.coroutines.Job? = null
+
     val targetBytes: Long
         get() = ((targetText.toDoubleOrNull() ?: 0.0) * if (unitMb) 1_048_576.0 else 1024.0).toLong()
 
@@ -115,6 +123,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
             source = r.source; targetText = r.targetText; unitMb = r.unitMb
             format = r.format; audioOut = r.audioOut; channels = r.channels
         }
+        if (source != null) refreshFloor()
         viewModelScope.launch { snapshotFlow { VideoJob.running || ToolJob.running }.collect { busy = it } }
         viewModelScope.launch {
             snapshotFlow { VideoJob.failure ?: ToolJob.failure }.collect { f ->
@@ -137,12 +146,56 @@ class ShrinkVm(app: Application) : BaseVm(app) {
 
     fun onTargetText(v: String) { targetText = v.filter { it.isDigit() || it == '.' }.take(7); stale() }
     fun onUnit(mb: Boolean) { unitMb = mb; stale() }
-    fun onFormat(f: OutFormat) { format = f; stale() }
+    fun onFormat(f: OutFormat) { format = f; stale(); if (source?.kind == Kind.IMAGE) refreshFloor() }
     fun onMaxHeight(h: Int) { maxHeight = h; stale() }
     fun onVideoCodec(c: VideoCodec) { videoCodec = c; stale() }
-    fun onAudioCodec(c: AudioCodec) { audioCodec = c; stale() }
-    fun onAudioKbps(k: Int) { audioKbps = k; stale() }
-    fun onAudioOut(o: AudioOut) { audioOut = o; stale() }
+    fun onAudioCodec(c: AudioCodec) { audioCodec = c; stale(); if (source?.kind == Kind.VIDEO) refreshFloor() }
+    fun onAudioKbps(k: Int) { audioKbps = k; stale(); if (source?.kind == Kind.VIDEO) refreshFloor() }
+    fun onAudioOut(o: AudioOut) { audioOut = o; stale(); if (source?.kind == Kind.AUDIO) refreshFloor() }
+
+    /** Works out the smallest file the app can make for the current file and settings, off the main thread. */
+    private fun refreshFloor() {
+        floorJob?.cancel()
+        val s = source
+        if (s == null) { floorBytes = null; floorBusy = false; return }
+        val app = getApplication<Application>()
+        val f = format; val ac = audioCodec; val kb = audioKbps; val out = audioOut
+        floorBusy = true; floorBytes = null
+        floorJob = viewModelScope.launch(Dispatchers.IO) {
+            var bytes: Long? = null
+            var label = "Smallest possible"
+            var tappable = true
+            try {
+                bytes = when (s.kind) {
+                    Kind.IMAGE -> Engine.smallestImage(cr, s.uri, f)
+                    Kind.PDF -> Engine.smallestPdf(cr, s.uri)
+                    Kind.VIDEO -> VideoEngine.smallest(app, s.uri, ac, kb)
+                    Kind.AUDIO -> {
+                        // Lossless formats have no size knob, so show what a lossy one could do instead.
+                        val lossy = if (out.lossless) (if (AudioOut.OPUS in AudioOut.available) AudioOut.OPUS else AudioOut.AAC) else out
+                        if (out.lossless) { label = "Smallest with ${lossy.label}"; tappable = false }
+                        AudioEngine.smallest(app, s.uri, lossy)
+                    }
+                }
+            } catch (e: Exception) {
+                bytes = null
+            }
+            if (!isActive) return@launch
+            floorBytes = bytes; floorLabel = label; floorTappable = tappable; floorBusy = false
+        }
+    }
+
+    /** Fills the target field with the smallest possible size (plus a little margin so rounding never undershoots). */
+    fun useFloor() {
+        val fb = floorBytes ?: return
+        val padded = fb * 1.03
+        targetText = if (unitMb) {
+            (kotlin.math.ceil(padded / 1_048_576.0 * 10) / 10).toString()
+        } else {
+            maxOf(5L, kotlin.math.ceil(padded / 1024.0).toLong()).toString()
+        }
+        stale()
+    }
     fun onChannels(c: Int) { channels = c; stale() }
 
     fun pick(uri: Uri?) {
@@ -170,6 +223,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
             }
             failure = null
             save.reset("")
+            refreshFloor()
         }
     }
 

@@ -108,6 +108,18 @@ object VideoEngine {
         return VideoInfo(dur, w, h, audio)
     }
 
+    /** Smallest target the video path accepts: the minimum video bitrate plus the audio track, over the whole length. */
+    fun smallest(ctx: Context, uri: Uri, audio: AudioCodec, audioKbps: Int): Long {
+        val info = probe(ctx, uri)
+        if (info.durationMs <= 0) error("Can't read this video's length.")
+        val audioBps = if (!info.hasAudio) 0 else when (audio) {
+            AudioCodec.ORIGINAL -> 128_000
+            AudioCodec.MUTE -> 0
+            else -> audioKbps * 1000
+        }
+        return (((MIN_VIDEO_BPS + audioBps) * (info.durationMs / 1000.0)) / 8 / SAFETY).toLong()
+    }
+
     /** [onProgress] gets (pass number, 0..1 within that pass): a retry pass starts again from 0. */
     suspend fun compress(ctx: Context, req: VideoRequest, onProgress: (Int, Float) -> Unit): VideoOut {
         val uri = req.source.uri

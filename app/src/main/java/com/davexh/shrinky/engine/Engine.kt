@@ -134,21 +134,7 @@ object Engine {
         pfd.use {
             PdfRenderer(it).use { renderer ->
                 val cache = HashMap<Int, ByteArray>()
-                fun build(step: Int): ByteArray = cache.getOrPut(step) {
-                    val (scale, q) = PDF_LADDER[step]
-                    val pages = (0 until renderer.pageCount).map { i ->
-                        renderer.openPage(i).use { p ->
-                            val w = (p.width * scale).roundToInt().coerceAtLeast(1)
-                            val h = (p.height * scale).roundToInt().coerceAtLeast(1)
-                            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
-                            p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            val jpg = Images.encode(bmp, OutFormat.JPG, q)
-                            bmp.recycle()
-                            JpegPage(jpg, w, h, p.width.toFloat(), p.height.toFloat())
-                        }
-                    }
-                    PdfWriter.write(pages)
-                }
+                fun build(step: Int): ByteArray = cache.getOrPut(step) { buildPdf(renderer, step) }
 
                 var lo = 0; var hi = PDF_LADDER.lastIndex
                 var best: ByteArray? = null; var bestStep = PDF_LADDER.lastIndex
@@ -164,5 +150,37 @@ object Engine {
                 )
             }
         }
+    }
+
+    private fun buildPdf(renderer: PdfRenderer, step: Int): ByteArray {
+                    val (scale, q) = PDF_LADDER[step]
+        val pages = (0 until renderer.pageCount).map { i ->
+            renderer.openPage(i).use { p ->
+                val w = (p.width * scale).roundToInt().coerceAtLeast(1)
+                val h = (p.height * scale).roundToInt().coerceAtLeast(1)
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
+                p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val jpg = Images.encode(bmp, OutFormat.JPG, q)
+                bmp.recycle()
+                JpegPage(jpg, w, h, p.width.toFloat(), p.height.toFloat())
+            }
+        }
+        PdfWriter.write(pages)
+                    }
+
+    /** Smallest image the search below can ever produce: lowest quality at the smallest scale it tries. */
+    fun smallestImage(cr: ContentResolver, uri: Uri, fmt: OutFormat): Long {
+        val d = Images.decode(cr, uri, MAX_SIDE)
+        val base = if (fmt == OutFormat.JPG) Images.flatten(d.bitmap) else d.bitmap
+        if (fmt == OutFormat.PNG) return Images.encode(Images.scaled(base, 0.04f), fmt, 100).size.toLong()
+        var scale = 1f
+        repeat(15) { scale *= 0.85f }
+        return Images.encode(Images.scaled(base, scale), fmt, MIN_Q).size.toLong()
+    }
+
+    /** Smallest PDF the ladder can produce (last rung: every page at 0.3x, quality 25). */
+    fun smallestPdf(cr: ContentResolver, uri: Uri): Long {
+        val pfd = cr.openFileDescriptor(uri, "r") ?: error("Can't open this PDF.")
+        pfd.use { PdfRenderer(it).use { r -> return buildPdf(r, PDF_LADDER.lastIndex).size.toLong() } }
     }
 }

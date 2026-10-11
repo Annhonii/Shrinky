@@ -8,7 +8,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -102,6 +105,19 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Field(vm.targetText, vm::onTargetText, "0", Modifier.weight(1f), keyboard = KeyboardType.Decimal, suffix = if (vm.unitMb) "MB" else "KB")
                     Segmented(listOf("KB", "MB"), if (vm.unitMb) 1 else 0, Modifier.width(112.dp)) { vm.onUnit(it == 1) }
+                }
+                if (src != null) {
+                    val fb = vm.floorBytes
+                    if (vm.floorBusy) {
+                        Text(vm.floorLabel + ": calculating\u2026", color = p.mute)
+                    } else if (fb != null) {
+                        val tap = vm.floorTappable
+                        Box(
+                            if (tap) Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { vm.useFloor() } else Modifier,
+                        ) {
+                            Text(vm.floorLabel + ": about " + formatSizeIn(fb, vm.unitMb) + if (tap) ". Tap to use." else ".", color = p.mute)
+                        }
+                    }
                 }
             }
 
