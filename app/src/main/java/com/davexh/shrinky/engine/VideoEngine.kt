@@ -89,9 +89,13 @@ object VideoEngine {
             var h = sqrt(pixels / aspect).roundToInt().coerceAtLeast(240)
             if (req.maxHeight > 0) h = minOf(h, req.maxHeight)
             h = minOf(h, info.height) and 1.inv()           // even number, as encoders want
+            // Transformer copies the video untouched (no re-encode at all) when nothing about it changes, which ignores
+            // the target completely and returns a file as big as the original. Shaving 2 pixels is invisible but
+            // always forces a real re-encode at the bitrate we asked for.
+            if (h >= info.height - 1) h = (info.height - 2) and 1.inv()
             finalH = h
 
-            val effects = if (h < info.height) listOf<Effect>(Presentation.createForHeight(h)) else emptyList()
+            val effects = listOf<Effect>(Presentation.createForHeight(h))
             val tmp = File(ctx.cacheDir, "shrinky_try$attempt.mp4")
             val used = runTransformer(ctx, uri, tmp, videoBps.toInt(), effects, req, info.hasAudio) {
                 onProgress(attempt, it)
@@ -109,6 +113,11 @@ object VideoEngine {
         }
 
         val chosen = best ?: error("Compression failed.")
+        val original = req.source.bytes
+        if (!hit && original > 0 && bestSize >= original) {
+            chosen.delete()
+            error("This phone's encoder couldn't make the video smaller. Try H.265, a lower max resolution, or a bigger target.")
+        }
         val out = File(ctx.cacheDir, "shrinky_video.mp4")
         withContext(Dispatchers.IO) {
             out.delete()
