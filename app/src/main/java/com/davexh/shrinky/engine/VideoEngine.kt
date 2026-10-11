@@ -1,6 +1,8 @@
 package com.davexh.shrinky.engine
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
@@ -47,21 +49,63 @@ object VideoEngine {
     private const val SAFETY = 0.93           // container overhead + rate-control slop
     private const val MAX_TRIES = 3
 
+    /**
+     * Reads size, duration and audio presence. MediaMetadataRetriever is tried first, but it returns nothing for some
+     * files (certain HEVC/10-bit, screen recordings, odd containers), so MediaExtractor fills in whatever is missing.
+     */
     fun probe(ctx: Context, uri: Uri): VideoInfo {
+        var w = 0
+        var h = 0
+        var rot = 0
+        var dur = 0L
+        var audio = false
+
         val r = MediaMetadataRetriever()
         try {
             r.setDataSource(ctx, uri)
             fun key(k: Int) = r.extractMetadata(k)
-            val rot = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            var w = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            var h = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            if (rot == 90 || rot == 270) { val t = w; w = h; h = t }   // upright size, what the user sees
-            val dur = key(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            val audio = key(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
-            return VideoInfo(dur, w, h, audio)
+            rot = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            w = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            h = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            dur = key(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            audio = key(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
+        } catch (e: Exception) {
+            // fall through to the extractor
         } finally {
             runCatching { r.release() }
         }
+
+        if (w <= 0 || h <= 0 || dur <= 0 || !audio) {
+            val ex = MediaExtractor()
+            try {
+                ex.setDataSource(ctx, uri, null)
+                var trackDur = 0L
+                for (i in 0 until ex.trackCount) {
+                    val f = ex.getTrackFormat(i)
+                    val mime = f.getString(MediaFormat.KEY_MIME).orEmpty()
+                    if (mime.startsWith("audio/")) audio = true
+                    if (mime.startsWith("video/")) {
+                        if (w <= 0 || h <= 0) {
+                            if (f.containsKey(MediaFormat.KEY_WIDTH)) w = f.getInteger(MediaFormat.KEY_WIDTH)
+                            if (f.containsKey(MediaFormat.KEY_HEIGHT)) h = f.getInteger(MediaFormat.KEY_HEIGHT)
+                            if (rot == 0 && f.containsKey(MediaFormat.KEY_ROTATION)) rot = f.getInteger(MediaFormat.KEY_ROTATION)
+                            // Extractor sizes are the raw, unrotated ones: undo the swap below only once.
+                            if (rot == 90 || rot == 270) { val t = w; w = h; h = t }
+                            rot = 0
+                        }
+                    }
+                    if (f.containsKey(MediaFormat.KEY_DURATION)) trackDur = maxOf(trackDur, f.getLong(MediaFormat.KEY_DURATION) / 1000)
+                }
+                if (dur <= 0) dur = trackDur
+            } catch (e: Exception) {
+                // report below
+            } finally {
+                runCatching { ex.release() }
+            }
+        }
+
+        if (rot == 90 || rot == 270) { val t = w; w = h; h = t }   // upright size, what the user sees
+        return VideoInfo(dur, w, h, audio)
     }
 
     /** [onProgress] gets (pass number, 0..1 within that pass): a retry pass starts again from 0. */
@@ -69,7 +113,9 @@ object VideoEngine {
         val uri = req.source.uri
         val target = req.target
         val info = withContext(Dispatchers.IO) { probe(ctx, uri) }
-        if (info.durationMs <= 0 || info.width <= 0 || info.height <= 0) error("Can't read this video.")
+        if (info.durationMs <= 0 || info.width <= 0 || info.height <= 0) {
+            error("Can't read this video's size or length. The file may be damaged or in a format this phone can't open.")
+        }
 
         val seconds = info.durationMs / 1000.0
         val audioBps = if (info.hasAudio) req.audioBps else 0
