@@ -40,6 +40,7 @@ import com.davexh.shrinky.engine.AudioOut
 import com.davexh.shrinky.engine.Kind
 import com.davexh.shrinky.engine.OutFormat
 import com.davexh.shrinky.engine.Shrunk
+import com.davexh.shrinky.engine.VideoEngine
 import com.davexh.shrinky.engine.VideoCodec
 
 /** The compress tool: everything lives in one card. */
@@ -106,6 +107,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                     Field(vm.targetText, vm::onTargetText, "0", Modifier.weight(1f), keyboard = KeyboardType.Decimal, suffix = if (vm.unitMb) "MB" else "KB")
                     Segmented(listOf("KB", "MB"), if (vm.unitMb) 1 else 0, Modifier.width(112.dp)) { vm.onUnit(it == 1) }
                 }
+                Hint("How big you want the result to be. The app lowers the quality (or resolution) until it fits. 1 MB = 1024 KB.")
                 if (src != null) {
                     val fb = vm.floorBytes
                     if (vm.floorBusy) {
@@ -118,6 +120,18 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                             Text(vm.floorLabel + ": about " + formatSizeIn(fb, vm.unitMb) + if (tap) ". Tap to use." else ".", color = p.mute)
                         }
                     }
+                    val lb = vm.losslessBytes
+                    if (!vm.floorBusy && lb != null) {
+                        val tapL = vm.losslessTappable
+                        Box(
+                            if (tapL) Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { vm.useLossless() } else Modifier,
+                        ) {
+                            Text(
+                                vm.losslessLabel.replace("{size}", formatSizeIn(lb, vm.unitMb)) + if (tapL) " Tap to use." else "",
+                                color = p.mute,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -125,6 +139,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 Rule()
                 Section("Output format") {
                     Segmented(OutFormat.entries.map { it.label }, vm.format.ordinal) { vm.onFormat(OutFormat.entries[it]) }
+                    Hint(imageFormatHint(vm.format))
                 }
             }
 
@@ -133,11 +148,18 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 Section("Output format") {
                     val formats = remember { AudioOut.available }
                     Segmented(formats.map { it.label }, formats.indexOf(vm.audioOut).coerceAtLeast(0)) { vm.onAudioOut(formats[it]) }
-                    Text(vm.audioOut.hint, color = p.mute)
+                    Hint(vm.audioOut.hint)
                 }
                 Rule()
                 Section("Channels") {
                     Segmented(listOf("Auto", "Mono", "Stereo"), vm.channels) { vm.onChannels(it) }
+                    Hint(
+                        when (vm.channels) {
+                            1 -> "One channel, half the data. Fine for voice, podcasts and lectures."
+                            2 -> "Left and right channels, like normal music. Uses more space."
+                            else -> "Switches to mono automatically at very small sizes, so the sound stays clear."
+                        },
+                    )
                 }
             }
 
@@ -146,23 +168,33 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
                 Section("Video codec") {
                     val codecs = remember { VideoCodec.available }
                     Segmented(codecs.map { it.label }, codecs.indexOf(vm.videoCodec).coerceAtLeast(0)) { vm.onVideoCodec(codecs[it]) }
+                    Hint(vm.videoCodec.hint)
                 }
                 Rule()
                 Section("Audio") {
                     val audio = AudioCodec.entries
                     Segmented(audio.map { it.label }, vm.audioCodec.ordinal) { vm.onAudioCodec(audio[it]) }
+                    Hint(vm.audioCodec.hint)
                 }
                 Reveal(vm.audioCodec == AudioCodec.AAC || vm.audioCodec == AudioCodec.OPUS) {
                     Rule()
                     Section("Audio bitrate") {
                         val steps = listOf(64, 96, 128, 192)
                         Segmented(steps.map { "${it}k" }, steps.indexOf(vm.audioKbps).coerceAtLeast(0)) { vm.onAudioKbps(steps[it]) }
+                        Hint("Higher sounds better but takes more space. 128k is good for most videos, 64k is fine for speech.")
                     }
                 }
                 Rule()
                 Section("Max resolution") {
-                    val steps = listOf(0, 1080, 720, 480)
-                    Segmented(listOf("Auto", "1080p", "720p", "480p"), steps.indexOf(vm.maxHeight).coerceAtLeast(0)) { vm.onMaxHeight(steps[it]) }
+                    val steps = listOf(0, VideoEngine.KEEP_RESOLUTION, 1080, 720, 480)
+                    Segmented(listOf("Auto", "Original", "1080p", "720p", "480p"), steps.indexOf(vm.maxHeight).coerceAtLeast(0)) { vm.onMaxHeight(steps[it]) }
+                    Hint(
+                        when (vm.maxHeight) {
+                            0 -> "The app picks the sharpest size that fits your target. Small targets lower the resolution."
+                            VideoEngine.KEEP_RESOLUTION -> "Never lowers the resolution. At small targets the video can look blocky, so try a bigger target or H.265."
+                            else -> "Never bigger than ${vm.maxHeight}p. Lower resolution stays cleaner at small sizes and is easier to play."
+                        },
+                    )
                 }
             }
 
@@ -189,7 +221,10 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
     if (b != null && a != null && src?.kind != Kind.VIDEO) {
         Rule()
         Section("Preview") {
-            if (hasZoom) Segmented(listOf("Fit", "100%"), view) { view = it }
+            if (hasZoom) {
+                Segmented(listOf("Fit", "100%"), view) { view = it }
+                Hint("Fit shows the whole photo. 100% zooms in so you can check fine detail.")
+            }
             CompareView(remember(b) { b.asImageBitmap() }, remember(a) { a.asImageBitmap() })
         }
     }
@@ -204,6 +239,7 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
                 PillButton(if (src.kind == Kind.AUDIO) "Play compressed audio" else "Play compressed video", style = PillStyle.Outlined) { open = true }
             } else {
                 Segmented(listOf("Compressed", "Original"), which) { which = it }
+                Hint("Switch between your compressed file and the original to compare them.")
                 val uri = if (which == 0) Uri.fromFile(file) else src.uri
                 val isAudio = src.kind == Kind.AUDIO
                 val aspect = when {

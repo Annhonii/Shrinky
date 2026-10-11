@@ -86,6 +86,30 @@ object AudioEngine {
     fun smallest(ctx: Context, uri: Uri, out: AudioOut): Long =
         ((minBitrate(out) * durationSec(ctx, uri)) / 8 / SAFETY).toLong()
 
+    /** FLAC usually lands around 60% of the raw PCM size. An estimate, since the audio's content decides. */
+    fun losslessEstimate(ctx: Context, uri: Uri): Long {
+        val sec = durationSec(ctx, uri)
+        var sr = 44_100
+        var ch = 2
+        val ex = MediaExtractor()
+        try {
+            ex.setDataSource(ctx, uri, null)
+            for (i in 0 until ex.trackCount) {
+                val f = ex.getTrackFormat(i)
+                if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                    if (f.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sr = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    if (f.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) ch = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            // keep the defaults
+        } finally {
+            runCatching { ex.release() }
+        }
+        return (sec * sr * min(ch, 2) * 2 * 0.6).toLong()
+    }
+
     private class Run(val desc: String, val notice: String?)
 
     private fun minBitrate(o: AudioOut) = if (o == AudioOut.OPUS) 6_000 else 8_000

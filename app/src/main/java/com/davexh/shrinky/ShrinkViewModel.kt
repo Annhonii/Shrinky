@@ -109,6 +109,10 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     var floorLabel by mutableStateOf("Smallest possible"); private set
     var floorTappable by mutableStateOf(true); private set
     var floorBusy by mutableStateOf(false); private set
+    var losslessBytes by mutableStateOf<Long?>(null); private set
+    var losslessLabel by mutableStateOf(""); private set          // contains "{size}", filled in by the UI in the chosen unit
+    var losslessTappable by mutableStateOf(false); private set
+    private var losslessSetsPng = false
     private var floorJob: kotlinx.coroutines.Job? = null
 
     val targetBytes: Long
@@ -148,53 +152,97 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     fun onUnit(mb: Boolean) { unitMb = mb; stale() }
     fun onFormat(f: OutFormat) { format = f; stale(); if (source?.kind == Kind.IMAGE) refreshFloor() }
     fun onMaxHeight(h: Int) { maxHeight = h; stale() }
-    fun onVideoCodec(c: VideoCodec) { videoCodec = c; stale() }
+    fun onVideoCodec(c: VideoCodec) { videoCodec = c; stale(); if (source?.kind == Kind.VIDEO) refreshFloor() }
     fun onAudioCodec(c: AudioCodec) { audioCodec = c; stale(); if (source?.kind == Kind.VIDEO) refreshFloor() }
     fun onAudioKbps(k: Int) { audioKbps = k; stale(); if (source?.kind == Kind.VIDEO) refreshFloor() }
     fun onAudioOut(o: AudioOut) { audioOut = o; stale(); if (source?.kind == Kind.AUDIO) refreshFloor() }
 
-    /** Works out the smallest file the app can make for the current file and settings, off the main thread. */
+    /** Works out the smallest file, and the best-quality size, for the current file and settings, off the main thread. */
     private fun refreshFloor() {
         floorJob?.cancel()
         val s = source
-        if (s == null) { floorBytes = null; floorBusy = false; return }
+        if (s == null) { floorBytes = null; losslessBytes = null; floorBusy = false; return }
         val app = getApplication<Application>()
-        val f = format; val ac = audioCodec; val kb = audioKbps; val out = audioOut
-        floorBusy = true; floorBytes = null
+        val f = format; val ac = audioCodec; val kb = audioKbps; val out = audioOut; val vc = videoCodec
+        floorBusy = true; floorBytes = null; losslessBytes = null
         floorJob = viewModelScope.launch(Dispatchers.IO) {
-            var bytes: Long? = null
-            var label = "Smallest possible"
-            var tappable = true
+            var minB: Long? = null
+            var minLabel = "Smallest possible"
+            var minTap = true
+            var llB: Long? = null
+            var llLabel = ""
+            var llTap = false
+            var llPng = false
+            val orig = s.bytes
             try {
-                bytes = when (s.kind) {
-                    Kind.IMAGE -> Engine.smallestImage(cr, s.uri, f)
-                    Kind.PDF -> Engine.smallestPdf(cr, s.uri)
-                    Kind.VIDEO -> VideoEngine.smallest(app, s.uri, ac, kb)
+                when (s.kind) {
+                    Kind.IMAGE -> {
+                        minB = Engine.smallestImage(cr, s.uri, f)
+                        llB = runCatching { Engine.losslessImage(cr, s.uri) }.getOrNull()
+                        llB?.let { b ->
+                            if (orig > 0 && b >= orig) llLabel = "Without quality loss: {size} as PNG, larger than the original."
+                            else { llLabel = "Without quality loss (PNG): about {size}."; llTap = true; llPng = true }
+                        }
+                    }
+                    Kind.PDF -> {
+                        minB = Engine.smallestPdf(cr, s.uri)
+                        llB = runCatching { Engine.bestQualityPdf(cr, s.uri) }.getOrNull()
+                        llB?.let { b ->
+                            if (orig > 0 && b >= orig) llLabel = "Best quality: {size}, larger than the original. PDFs are re-rendered, so never pixel-perfect."
+                            else { llLabel = "Best quality (PDFs are re-rendered, so not pixel-perfect): about {size}."; llTap = true }
+                        }
+                    }
+                    Kind.VIDEO -> {
+                        minB = VideoEngine.smallest(app, s.uri, ac, kb)
+                        llB = runCatching { VideoEngine.nearLossless(app, s.uri, vc, ac, kb) }.getOrNull()
+                        llB?.let { b ->
+                            if (orig > 0 && b >= orig) llLabel = "Visually lossless needs about {size}, more than the original, so there's little to gain."
+                            else { llLabel = "Visually lossless (estimate): about {size}."; llTap = true }
+                        }
+                    }
                     Kind.AUDIO -> {
                         // Lossless formats have no size knob, so show what a lossy one could do instead.
                         val lossy = if (out.lossless) (if (AudioOut.OPUS in AudioOut.available) AudioOut.OPUS else AudioOut.AAC) else out
-                        if (out.lossless) { label = "Smallest with ${lossy.label}"; tappable = false }
-                        AudioEngine.smallest(app, s.uri, lossy)
+                        if (out.lossless) { minLabel = "Smallest with ${lossy.label}"; minTap = false }
+                        minB = AudioEngine.smallest(app, s.uri, lossy)
+                        llB = runCatching { AudioEngine.losslessEstimate(app, s.uri) }.getOrNull()
+                        llB?.let { llLabel = "Lossless (FLAC, estimate): about {size}." }
                     }
                 }
             } catch (e: Exception) {
-                bytes = null
+                minB = null
             }
             if (!isActive) return@launch
-            floorBytes = bytes; floorLabel = label; floorTappable = tappable; floorBusy = false
+            floorBytes = minB; floorLabel = minLabel; floorTappable = minTap
+            losslessBytes = llB; losslessLabel = llLabel; losslessTappable = llTap; losslessSetsPng = llPng
+            floorBusy = false
+        }
+    }
+
+    private fun fillTarget(bytes: Long) {
+        val padded = bytes * 1.03
+        targetText = if (unitMb) {
+            (kotlin.math.ceil(padded / 1_048_576.0 * 10) / 10).toString()
+        } else {
+            maxOf(5L, kotlin.math.ceil(padded / 1024.0).toLong()).toString()
         }
     }
 
     /** Fills the target field with the smallest possible size (plus a little margin so rounding never undershoots). */
     fun useFloor() {
         val fb = floorBytes ?: return
-        val padded = fb * 1.03
-        targetText = if (unitMb) {
-            (kotlin.math.ceil(padded / 1_048_576.0 * 10) / 10).toString()
-        } else {
-            maxOf(5L, kotlin.math.ceil(padded / 1024.0).toLong()).toString()
-        }
+        fillTarget(fb)
         stale()
+    }
+
+    /** Fills the target with the no-quality-loss size. For photos that also switches the output to PNG, which is lossless. */
+    fun useLossless() {
+        val lb = losslessBytes ?: return
+        val png = losslessSetsPng
+        if (png) format = OutFormat.PNG
+        fillTarget(lb)
+        stale()
+        if (png) refreshFloor()
     }
     fun onChannels(c: Int) { channels = c; stale() }
 

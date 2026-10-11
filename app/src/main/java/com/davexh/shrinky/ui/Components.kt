@@ -411,6 +411,18 @@ private fun BusyLine() {
     }
 }
 
+/** A small grey explanation line under an option. */
+@Composable
+fun Hint(text: String) {
+    Text(text, color = LocalPalette.current.mute, style = Type.small)
+}
+
+fun imageFormatHint(f: com.davexh.shrinky.engine.OutFormat): String = when (f) {
+    com.davexh.shrinky.engine.OutFormat.JPG -> "Best for photos. Small files, and you can set the exact size."
+    com.davexh.shrinky.engine.OutFormat.PNG -> "Keeps every pixel (lossless) but can\u2019t get very small. To reach a size, the picture itself is shrunk."
+    com.davexh.shrinky.engine.OutFormat.WEBP -> "Smaller than JPG at the same look. Very old apps can\u2019t open it."
+}
+
 @Composable
 fun StatusSection(busy: Boolean, failure: String?) {
     val p = LocalPalette.current

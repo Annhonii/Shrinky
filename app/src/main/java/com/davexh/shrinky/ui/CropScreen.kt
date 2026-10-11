@@ -68,6 +68,10 @@ fun CropScreen(vm: CropVm, pickFolder: () -> Unit) {
             Rule()
             Section("Crop") {
                 Segmented(listOf("Size", "Ratio"), vm.mode) { vm.onMode(it) }
+                Hint(
+                    if (vm.mode == 0) "Size: the exact width and height in pixels, like 1080 \u00d7 1080."
+                    else "Ratio: a shape like 1:1 or 16:9. You choose which part of the photo to keep.",
+                )
                 AnimatedContent(
                     targetState = vm.mode,
                     transitionSpec = { fadeIn(spring(stiffness = 300f)) togetherWith fadeOut(spring(stiffness = 500f)) },
@@ -102,6 +106,7 @@ fun CropScreen(vm: CropVm, pickFolder: () -> Unit) {
                 Rule()
                 Section("Output format") {
                     Segmented(OutFormat.entries.map { it.label }, vm.format.ordinal) { vm.onFormat(OutFormat.entries[it]) }
+                    Hint(imageFormatHint(vm.format))
                 }
             }
 

@@ -153,7 +153,7 @@ object Engine {
     }
 
     private fun buildPdf(renderer: PdfRenderer, step: Int): ByteArray {
-                    val (scale, q) = PDF_LADDER[step]
+        val (scale, q) = PDF_LADDER[step]
         val pages = (0 until renderer.pageCount).map { i ->
             renderer.openPage(i).use { p ->
                 val w = (p.width * scale).roundToInt().coerceAtLeast(1)
@@ -166,7 +166,7 @@ object Engine {
             }
         }
         return PdfWriter.write(pages)
-                    }
+    }
 
     /** Smallest image the search below can ever produce: lowest quality at the smallest scale it tries. */
     fun smallestImage(cr: ContentResolver, uri: Uri, fmt: OutFormat): Long {
@@ -178,9 +178,19 @@ object Engine {
         return Images.encode(Images.scaled(base, scale), fmt, MIN_Q).size.toLong()
     }
 
+    /** Size with no quality loss at full resolution: a lossless PNG of the decoded picture. */
+    fun losslessImage(cr: ContentResolver, uri: Uri): Long =
+        Images.encode(Images.decode(cr, uri, MAX_SIDE).bitmap, OutFormat.PNG, 100).size.toLong()
+
+    /** Best the PDF path can do (first rung: 2x render, quality 85). Still re-rendered, never pixel-identical. */
+    fun bestQualityPdf(cr: ContentResolver, uri: Uri): Long {
+        val pfd = cr.openFileDescriptor(uri, "r") ?: error("Can't open this PDF.")
+        return pfd.use { PdfRenderer(it).use { r -> buildPdf(r, 0).size.toLong() } }
+    }
+
     /** Smallest PDF the ladder can produce (last rung: every page at 0.3x, quality 25). */
     fun smallestPdf(cr: ContentResolver, uri: Uri): Long {
         val pfd = cr.openFileDescriptor(uri, "r") ?: error("Can't open this PDF.")
-        pfd.use { PdfRenderer(it).use { r -> return buildPdf(r, PDF_LADDER.lastIndex).size.toLong() } }
+        return pfd.use { PdfRenderer(it).use { r -> buildPdf(r, PDF_LADDER.lastIndex).size.toLong() } }
     }
 }

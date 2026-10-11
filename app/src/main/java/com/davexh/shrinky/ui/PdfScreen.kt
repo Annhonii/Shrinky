@@ -113,6 +113,10 @@ fun PdfScreen(vm: PdfVm, pickFolder: () -> Unit) {
             Rule()
             Section("Page size") {
                 Segmented(listOf("A4", "Photo size"), if (vm.a4) 0 else 1) { vm.onA4(it == 0) }
+                Hint(
+                    if (vm.a4) "Every photo is fitted onto a standard A4 page, with white margins if needed."
+                    else "Each page is exactly as big as its photo, with no margins.",
+                )
             }
 
             StatusSection(vm.busy, vm.failure)

@@ -44,6 +44,8 @@ class VideoOut(
  * Target size is turned into a bitrate budget; if the encoder overshoots, it retries with a corrected bitrate.
  */
 object VideoEngine {
+    /** Value for "Max resolution" meaning: never lower the resolution, whatever the bitrate. */
+    const val KEEP_RESOLUTION = -1
     private const val MIN_VIDEO_BPS = 100_000
     private const val ASSUMED_FPS = 30
     private const val SAFETY = 0.93           // container overhead + rate-control slop
@@ -120,6 +122,20 @@ object VideoEngine {
         return (((MIN_VIDEO_BPS + audioBps) * (info.durationMs / 1000.0)) / 8 / SAFETY).toLong()
     }
 
+    /** Rough size for a visually lossless re-encode: about 2.5x the bits per pixel the app normally spends. An estimate. */
+    fun nearLossless(ctx: Context, uri: Uri, codec: VideoCodec, audio: AudioCodec, audioKbps: Int): Long {
+        val info = probe(ctx, uri)
+        if (info.durationMs <= 0 || info.width <= 0 || info.height <= 0) error("Can't read this video.")
+        val sec = info.durationMs / 1000.0
+        val audioBps = if (!info.hasAudio) 0 else when (audio) {
+            AudioCodec.ORIGINAL -> 128_000
+            AudioCodec.MUTE -> 0
+            else -> audioKbps * 1000
+        }
+        val videoBits = info.width.toDouble() * info.height * ASSUMED_FPS * codec.bpp * 2.5 * sec
+        return ((videoBits + audioBps * sec) / 8).toLong()
+    }
+
     /** [onProgress] gets (pass number, 0..1 within that pass): a retry pass starts again from 0. */
     suspend fun compress(ctx: Context, req: VideoRequest, onProgress: (Int, Float) -> Unit): VideoOut {
         val uri = req.source.uri
@@ -146,6 +162,7 @@ object VideoEngine {
             val aspect = info.width.toDouble() / info.height
             var h = sqrt(pixels / aspect).roundToInt().coerceAtLeast(240)
             if (req.maxHeight > 0) h = minOf(h, req.maxHeight)
+            if (req.maxHeight == KEEP_RESOLUTION) h = info.height
             h = minOf(h, info.height) and 1.inv()           // even number, as encoders want
             // Transformer copies the video untouched (no re-encode at all) when nothing about it changes, which ignores
             // the target completely and returns a file as big as the original. Shaving 2 pixels is invisible but
