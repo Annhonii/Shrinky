@@ -50,7 +50,7 @@ fun ShrinkScreen(vm: ShrinkVm, pickFolder: () -> Unit) {
     // Android 13+ needs a runtime OK to show the progress notification. Compression runs either way.
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.shrink() }
     val onShrink = {
-        if (src?.kind == Kind.VIDEO && Build.VERSION.SDK_INT >= 33 &&
+        if (src != null && Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS) else vm.shrink()
     }
@@ -170,7 +170,7 @@ private fun ColumnScope.ResultBlock(vm: ShrinkVm, r: Shrunk, pickFolder: () -> U
     val b = if (useZoom) r.beforeZoom else r.before
     val a = if (useZoom) r.afterZoom else r.after
 
-    if (b != null && a != null) {
+    if (b != null && a != null && src?.kind != Kind.VIDEO) {
         Rule()
         Section("Preview") {
             if (hasZoom) Segmented(listOf("Fit", "100%"), view) { view = it }

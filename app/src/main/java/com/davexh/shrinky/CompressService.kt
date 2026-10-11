@@ -15,9 +15,11 @@ import android.os.PowerManager
 import android.os.SystemClock
 import com.davexh.shrinky.engine.AudioCodec
 import com.davexh.shrinky.engine.Shrunk
+import com.davexh.shrinky.engine.ToolJob
 import com.davexh.shrinky.engine.VideoCodec
 import com.davexh.shrinky.engine.VideoEngine
 import com.davexh.shrinky.engine.VideoJob
+import com.davexh.shrinky.ui.formatSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,10 +27,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Runs video compression as a foreground service so it continues when the app is in the background,
- * with a progress notification (and a Cancel button).
+ * Runs every compression (video, photo, PDF, audio) as a foreground service so it keeps going in the background,
+ * with a notification (progress for video, a busy bar for the rest) and a Cancel button.
  */
 class CompressService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -37,6 +40,7 @@ class CompressService : Service() {
     private var lastText: String? = null
     private var pass = 0
     private var passStart = 0L
+    private var title = "Compressing"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -46,50 +50,80 @@ class CompressService : Service() {
             if (job == null) stopSelf()
             return START_NOT_STICKY
         }
+        val video = VideoJob.request
+        val isVideo = VideoJob.running && video != null
+        val isTool = !isVideo && ToolJob.running && ToolJob.task != null
+        title = if (isVideo) "Compressing video" else ToolJob.label
         // A service started with startForegroundService() must call startForeground() right away, whatever happens next.
-        goForeground()
-        val req = VideoJob.request
-        if (req == null || !VideoJob.running || job?.isActive == true) {
+        goForeground(indeterminate = !isVideo)
+
+        if (job?.isActive == true || (!isVideo && !isTool)) {
             if (job?.isActive != true) finishService()
             return START_NOT_STICKY
         }
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "shrinky:compress").apply { acquire(6 * 60 * 60 * 1000L) }
-
         pass = 0; lastText = null; passStart = SystemClock.elapsedRealtime()
-        job = scope.launch {
-            try {
-                val out = VideoEngine.compress(applicationContext, req) { attempt, p ->
-                    if (attempt != pass) { pass = attempt; passStart = SystemClock.elapsedRealtime(); lastText = null }
-                    VideoJob.progress = p
-                    val pct = (p * 100).toInt().coerceIn(0, 100)
-                    val text = progressText(attempt, pct, p)
-                    if (text != lastText) { lastText = text; notifyProgress(pct, text) }
-                }
-                VideoJob.succeed(
-                    Shrunk(
-                        ByteArray(0), "video/mp4", "mp4", out.hitTarget,
-                        origW = out.origW, origH = out.origH, newW = out.newW, newH = out.newH,
-                        before = out.before, after = out.after, file = out.file,
-                        codecInfo = VideoCodec.labelOf(out.videoMime ?: req.video.mime) + ", " +
-                            (if (req.audio == AudioCodec.MUTE) "no audio" else AudioCodec.labelOf(out.audioMime)),
-                        notice = fallbackNotice(req.video, req.audio, out.videoMime, out.audioMime),
-                    ),
-                )
-                postDone("Compression finished", "Open Shrinky to save your video.")
-            } catch (e: CancellationException) {
-                VideoJob.fail("Compression cancelled.")
-                throw e
-            } catch (e: Throwable) {
-                val msg = e.message ?: "Couldn't compress this video."
-                VideoJob.fail(msg)
-                postDone("Compression failed", msg)
-            } finally {
-                finishService()
-            }
-        }
+
+        job = if (isVideo) scope.launch { runVideo(video!!) } else scope.launch { runTool() }
         return START_NOT_STICKY
+    }
+
+    private suspend fun runVideo(req: com.davexh.shrinky.engine.VideoRequest) {
+        try {
+            val out = VideoEngine.compress(applicationContext, req) { attempt, p ->
+                if (attempt != pass) { pass = attempt; passStart = SystemClock.elapsedRealtime(); lastText = null }
+                VideoJob.progress = p
+                val pct = (p * 100).toInt().coerceIn(0, 100)
+                val text = progressText(attempt, pct, p)
+                if (text != lastText) { lastText = text; notifyProgress(pct, text) }
+            }
+            val result = Shrunk(
+                ByteArray(0), "video/mp4", "mp4", out.hitTarget,
+                origW = out.origW, origH = out.origH, newW = out.newW, newH = out.newH,
+                file = out.file,
+                codecInfo = VideoCodec.labelOf(out.videoMime ?: req.video.mime) + ", " +
+                    (if (req.audio == AudioCodec.MUTE) "no audio" else AudioCodec.labelOf(out.audioMime)),
+                notice = fallbackNotice(req.video, req.audio, out.videoMime, out.audioMime),
+            )
+            VideoJob.succeed(result)
+            postDone("Video compressed", doneText(req.source.name, req.source.bytes, result.size))
+        } catch (e: CancellationException) {
+            VideoJob.fail("Compression cancelled.")
+            throw e
+        } catch (e: Throwable) {
+            val msg = e.message ?: "Couldn't compress this video."
+            VideoJob.fail(msg)
+            postDone("Video compression failed", msg)
+        } finally {
+            finishService()
+        }
+    }
+
+    private suspend fun runTool() {
+        val req = ToolJob.request
+        val task = ToolJob.task
+        val doneTitle = ToolJob.label.replace("Compressing", "").trim().replaceFirstChar { it.uppercase() } + " compressed"
+        try {
+            val result = withContext(Dispatchers.Default) { task!!.invoke() }
+            ToolJob.succeed(result)
+            postDone(doneTitle, doneText(req?.source?.name ?: "", req?.source?.bytes ?: 0L, result.size))
+        } catch (e: CancellationException) {
+            ToolJob.fail("Compression cancelled.")
+            throw e
+        } catch (e: Throwable) {
+            val msg = e.message ?: "Something went wrong."
+            ToolJob.fail(msg)
+            postDone("Compression failed", msg)
+        } finally {
+            finishService()
+        }
+    }
+
+    private fun doneText(name: String, before: Long, after: Long): String {
+        val sizes = if (before > 0) "${formatSize(before)} \u2192 ${formatSize(after)}" else formatSize(after)
+        return (if (name.isNotEmpty()) "$name: " else "") + sizes + ". Open Shrinky to save."
     }
 
     /** "42% · 3 min left". The estimate is elapsed time scaled by what's left, so it settles after a few seconds. */
@@ -142,7 +176,7 @@ class CompressService : Service() {
     private fun ensureChannel() {
         val m = manager()
         if (m.getNotificationChannel(CHANNEL) == null) {
-            m.createNotificationChannel(NotificationChannel(CHANNEL, "Video compression", NotificationManager.IMPORTANCE_LOW))
+            m.createNotificationChannel(NotificationChannel(CHANNEL, "Compression", NotificationManager.IMPORTANCE_LOW))
         }
     }
 
@@ -151,17 +185,18 @@ class CompressService : Service() {
         return PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    private fun progressNotification(pct: Int, text: String): Notification {
+    private fun progressNotification(pct: Int, text: String, indeterminate: Boolean): Notification {
         val cancel = PendingIntent.getService(
             this, 1, Intent(this, CompressService::class.java).setAction(ACTION_CANCEL),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val name = VideoJob.request?.source?.name.takeIf { VideoJob.running } ?: ToolJob.request?.source?.name
         val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_shrinky)
-            .setContentTitle("Compressing video")
+            .setContentTitle(title)
             .setContentText(text)
-            .setSubText(VideoJob.request?.source?.name)
-            .setProgress(100, pct, false)
+            .setSubText(name)
+            .setProgress(100, pct, indeterminate)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_PROGRESS)
@@ -173,15 +208,15 @@ class CompressService : Service() {
         return b.build()
     }
 
-    private fun goForeground() {
+    private fun goForeground(indeterminate: Boolean) {
         ensureChannel()
-        val n = progressNotification(0, "Starting")
+        val n = progressNotification(0, if (indeterminate) "Working" else "Starting", indeterminate)
         if (Build.VERSION.SDK_INT >= 29) startForeground(ID_PROGRESS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(ID_PROGRESS, n)
     }
 
     private fun notifyProgress(pct: Int, text: String) {
-        manager().notify(ID_PROGRESS, progressNotification(pct, text))
+        manager().notify(ID_PROGRESS, progressNotification(pct, text, false))
     }
 
     private fun postDone(title: String, text: String) {
@@ -189,6 +224,7 @@ class CompressService : Service() {
             .setSmallIcon(R.drawable.ic_stat_shrinky)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
             .setAutoCancel(true)
             .setContentIntent(openApp())
             .build()

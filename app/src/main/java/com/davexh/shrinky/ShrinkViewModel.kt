@@ -24,6 +24,8 @@ import com.davexh.shrinky.engine.OutFormat
 import com.davexh.shrinky.engine.PdfMaker
 import com.davexh.shrinky.engine.Saver
 import com.davexh.shrinky.engine.Shrunk
+import com.davexh.shrinky.engine.ToolJob
+import com.davexh.shrinky.engine.ToolRequest
 import com.davexh.shrinky.engine.VideoCodec
 import com.davexh.shrinky.engine.VideoEngine
 import com.davexh.shrinky.engine.VideoJob
@@ -87,7 +89,6 @@ data class Source(val uri: Uri, val name: String, val bytes: Long, val kind: Kin
 
 class ShrinkVm(app: Application) : BaseVm(app) {
     var source by mutableStateOf<Source?>(null); private set
-    private var localResult by mutableStateOf<Shrunk?>(null)
     var targetText by mutableStateOf(""); private set
     var unitMb by mutableStateOf(false); private set
     var format by mutableStateOf(OutFormat.JPG); private set
@@ -98,9 +99,9 @@ class ShrinkVm(app: Application) : BaseVm(app) {
     var audioOut by mutableStateOf(AudioOut.AAC); private set        // audio files: output format
     var channels by mutableIntStateOf(0); private set                // audio files: 0 auto, 1 mono, 2 stereo
 
-    /** Images and PDFs are computed here; a video result belongs to VideoJob so it survives the app being left. */
+    /** Results belong to the background jobs, so they survive the app being left or recreated. */
     val result: Shrunk?
-        get() = if (source?.kind == Kind.VIDEO) VideoJob.result else localResult
+        get() = if (source?.kind == Kind.VIDEO) VideoJob.result else ToolJob.result
 
     val targetBytes: Long
         get() = ((targetText.toDoubleOrNull() ?: 0.0) * if (unitMb) 1_048_576.0 else 1024.0).toLong()
@@ -110,26 +111,27 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         VideoJob.request?.let { r ->
             source = r.source; targetText = r.targetText; unitMb = r.unitMb
             maxHeight = r.maxHeight; videoCodec = r.video; audioCodec = r.audio; audioKbps = r.audioKbps
+        } ?: ToolJob.request?.let { r ->
+            source = r.source; targetText = r.targetText; unitMb = r.unitMb
+            format = r.format; audioOut = r.audioOut; channels = r.channels
         }
-        viewModelScope.launch { snapshotFlow { VideoJob.running }.collect { busy = it } }
+        viewModelScope.launch { snapshotFlow { VideoJob.running || ToolJob.running }.collect { busy = it } }
         viewModelScope.launch {
-            snapshotFlow { VideoJob.failure }.collect { f ->
-                if (f != null) { failure = f; VideoJob.failure = null }
+            snapshotFlow { VideoJob.failure ?: ToolJob.failure }.collect { f ->
+                if (f != null) { failure = f; VideoJob.failure = null; ToolJob.failure = null }
             }
         }
         viewModelScope.launch {
-            snapshotFlow { VideoJob.result }.collect { r ->
+            snapshotFlow { result }.collect { r ->
                 val s = source
-                if (r != null && s != null && s.kind == Kind.VIDEO && save.name.isEmpty()) {
-                    save.reset(s.name.substringBeforeLast('.') + "_shrunk")
-                }
+                if (r != null && s != null && save.name.isEmpty()) save.reset(s.name.substringBeforeLast('.') + "_shrunk")
             }
         }
     }
 
     private fun stale() {
-        localResult = null
-        if (!VideoJob.running) VideoJob.clear()
+        VideoJob.clear()
+        ToolJob.clear()
         failure = null; save.savedAs = null
     }
 
@@ -145,7 +147,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
 
     fun pick(uri: Uri?) {
         uri ?: return
-        if (VideoJob.running) { failure = "A video is still compressing. Cancel it from the notification first."; return }
+        if (VideoJob.running || ToolJob.running) { failure = "Something is still compressing. Wait for it, or cancel it from the notification."; return }
         viewModelScope.launch(Dispatchers.IO) {
             val mime = cr.getType(uri).orEmpty()
             val kind = when {
@@ -157,6 +159,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
             }
             if (kind == null) { failure = "Only photos, videos, audio and PDFs are supported."; return@launch }
             VideoJob.clear()
+            ToolJob.clear()
             VideoEngine.clearCache(getApplication())
             val (name, size) = queryMeta(cr, uri)
             source = Source(uri, name, size, kind, mime)
@@ -165,7 +168,6 @@ class ShrinkVm(app: Application) : BaseVm(app) {
                 "image/webp" -> OutFormat.WEBP
                 else -> OutFormat.JPG
             }
-            localResult = null
             failure = null
             save.reset("")
         }
@@ -175,23 +177,32 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         val s = source ?: return
         val t = targetBytes
         if (t < 5 * 1024) { failure = "Target must be at least 5 KB."; return }
-        val f = format
-        localResult = null
+        if (VideoJob.running || ToolJob.running) return
         save.reset("")
         if (s.kind == Kind.VIDEO) { shrinkVideo(s, t); return }
-        if (s.kind == Kind.AUDIO) {
-            val out = audioOut
-            val ch = channels
-            val app = getApplication<Application>()
-            work {
-                localResult = AudioEngine.compress(app, s.uri, t, out, ch)
-                save.reset(s.name.substringBeforeLast('.') + "_shrunk")
-            }
-            return
+
+        val app = getApplication<Application>()
+        val f = format
+        val out = audioOut
+        val ch = channels
+        val resolver = app.contentResolver
+        val (label, task) = when (s.kind) {
+            Kind.AUDIO -> "Compressing audio" to { AudioEngine.compress(app, s.uri, t, out, ch) }
+            Kind.PDF -> "Compressing PDF" to { Engine.compress(resolver, s.uri, s.kind, s.mime, s.bytes, t, f) }
+            else -> "Compressing photo" to { Engine.compress(resolver, s.uri, s.kind, s.mime, s.bytes, t, f) }
         }
-        work {
-            localResult = Engine.compress(cr, s.uri, s.kind, s.mime, s.bytes, t, f)
-            save.reset(s.name.substringBeforeLast('.') + "_shrunk")
+        failure = null
+        VideoEngine.clearCache(app)
+        ToolJob.begin(ToolRequest(s, targetText, unitMb, f, out, ch), label, task)
+        startService(app)
+    }
+
+    private fun startService(app: Application) {
+        try {
+            app.startForegroundService(Intent(app, CompressService::class.java))
+        } catch (e: Throwable) {
+            val msg = "Couldn't start compression: ${e.message}"
+            VideoJob.fail(msg); ToolJob.fail(msg)
         }
     }
 
@@ -202,11 +213,7 @@ class ShrinkVm(app: Application) : BaseVm(app) {
         val app = getApplication<Application>()
         VideoEngine.clearCache(app)
         VideoJob.begin(VideoRequest(s, target, maxHeight, videoCodec, audioCodec, audioKbps, targetText, unitMb))
-        try {
-            app.startForegroundService(Intent(app, CompressService::class.java))
-        } catch (e: Throwable) {
-            VideoJob.fail("Couldn't start compression: ${e.message}")
-        }
+        startService(app)
     }
 
     fun saveResult() {

@@ -1,7 +1,6 @@
 package com.davexh.shrinky.engine
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
@@ -28,14 +27,13 @@ import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-class VideoInfo(val durationMs: Long, val width: Int, val height: Int, val hasAudio: Boolean, val frame: Bitmap?)
+class VideoInfo(val durationMs: Long, val width: Int, val height: Int, val hasAudio: Boolean)
 
 class VideoOut(
     val file: File,
     val hitTarget: Boolean,
     val origW: Int, val origH: Int,
     val newW: Int, val newH: Int,
-    val before: Bitmap?, val after: Bitmap?,
     val videoMime: String?, val audioMime: String?,
 )
 
@@ -60,8 +58,7 @@ object VideoEngine {
             if (rot == 90 || rot == 270) { val t = w; w = h; h = t }   // upright size, what the user sees
             val dur = key(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             val audio = key(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
-            val frame = r.getFrameAtTime(dur * 1000 / 2, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            return VideoInfo(dur, w, h, audio, frame)
+            return VideoInfo(dur, w, h, audio)
         } finally {
             runCatching { r.release() }
         }
@@ -123,8 +120,6 @@ object VideoEngine {
         val newH = after?.height?.takeIf { it > 0 } ?: finalH
         return VideoOut(
             out, hit, info.width, info.height, newW, newH,
-            before = info.frame?.let { Images.thumb(it) },
-            after = after?.frame?.let { Images.thumb(it) },
             videoMime = bestUsed?.videoMimeType,
             audioMime = bestUsed?.audioMimeType,
         )
