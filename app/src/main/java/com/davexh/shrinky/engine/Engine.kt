@@ -165,7 +165,7 @@ object Engine {
                 JpegPage(jpg, w, h, p.width.toFloat(), p.height.toFloat())
             }
         }
-        PdfWriter.write(pages)
+        return PdfWriter.write(pages)
                     }
 
     /** Smallest image the search below can ever produce: lowest quality at the smallest scale it tries. */
